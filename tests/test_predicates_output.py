@@ -1,7 +1,7 @@
 """Tests for output predicates."""
 
 import pytest
-from agentpact import Contract, no_pii, output_contains, output_matches, max_output_length, output_must_not_contain
+from pactrun import Contract, no_pii, output_contains, output_matches, max_output_length, output_must_not_contain
 
 
 class TestNoPii:

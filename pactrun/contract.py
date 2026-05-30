@@ -6,7 +6,7 @@ or loaded from YAML files.
 
 Usage::
 
-    from agentpact import Contract, cost_under, must_not_call
+    from pactrun import Contract, cost_under, must_not_call
 
     contract = (
         Contract("support_agent")
@@ -23,8 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from agentpact.core.enums import ClauseKind, OnFail, Severity
-from agentpact.core.models import Clause, Event, PredicateResult, SessionState
+from pactrun.core.enums import ClauseKind, OnFail, Severity
+from pactrun.core.models import Clause, Event, PredicateResult, SessionState
 
 
 @dataclass
@@ -59,12 +59,20 @@ class Contract:
         description: str = "",
         severity: Severity = Severity.ERROR,
         on_fail: OnFail | str | None = None,
-        check_on: str = "every_event",
+        check_on: str | None = None,
     ) -> Contract:
-        """Add a must-satisfy clause."""
+        """Add a must-satisfy clause.
+
+        When ``check_on`` is not given explicitly, the predicate's own
+        ``_check_on`` hint is honored (e.g. ``must_call`` / ``tool_order`` /
+        ``output_contains`` declare ``"session_end"`` because they can only be
+        satisfied once the whole session has run). It falls back to
+        ``"every_event"`` for predicates that should be checked continuously.
+        """
         if isinstance(on_fail, str):
             on_fail = OnFail(on_fail)
         pred_name = getattr(predicate_fn, "predicate_name", "")
+        resolved_check_on = check_on or getattr(predicate_fn, "_check_on", None) or "every_event"
         self.clauses.append(Clause(
             kind=ClauseKind.REQUIRE,
             predicate=predicate_fn,
@@ -72,7 +80,7 @@ class Contract:
             description=description or pred_name or "require clause",
             severity=severity,
             on_fail=on_fail or self.default_on_fail,
-            check_on=check_on,
+            check_on=resolved_check_on,
         ))
         return self
 
@@ -83,12 +91,19 @@ class Contract:
         description: str = "",
         severity: Severity = Severity.CRITICAL,
         on_fail: OnFail | str | None = None,
-        check_on: str = "every_event",
+        check_on: str | None = None,
     ) -> Contract:
-        """Add a must-not-violate clause. Forbid always uses CRITICAL by default."""
+        """Add a must-not-violate clause. Forbid always uses CRITICAL by default.
+
+        Like :meth:`require`, an unset ``check_on`` is resolved from the
+        predicate's ``_check_on`` hint, falling back to ``"every_event"`` so
+        forbidden behavior (e.g. ``must_not_call``) is caught the moment it
+        happens.
+        """
         if isinstance(on_fail, str):
             on_fail = OnFail(on_fail)
         pred_name = getattr(predicate_fn, "predicate_name", "")
+        resolved_check_on = check_on or getattr(predicate_fn, "_check_on", None) or "every_event"
         self.clauses.append(Clause(
             kind=ClauseKind.FORBID,
             predicate=predicate_fn,
@@ -96,7 +111,7 @@ class Contract:
             description=description or pred_name or "forbid clause",
             severity=severity,
             on_fail=on_fail or OnFail.BLOCK,
-            check_on=check_on,
+            check_on=resolved_check_on,
         ))
         return self
 
@@ -165,7 +180,7 @@ class Contract:
 
     def session(self, **kwargs: Any) -> "Session":
         """Create an enforcement session for this contract."""
-        from agentpact.session import Session
+        from pactrun.session import Session
         return Session(self, **kwargs)
 
     def enforce(self, fn: Callable) -> Callable:
@@ -179,12 +194,12 @@ class Contract:
                 with self.session() as session:
                     result = await fn(*args, **kwargs)
                 if not session.is_compliant:
-                    from agentpact.core.errors import ViolationError
+                    from pactrun.core.errors import ViolationError
                     errors = [v for v in session.violations if v.severity in (Severity.ERROR, Severity.CRITICAL)]
                     if errors:
                         raise ViolationError(errors[0])
                 return result
-            async_wrapper._agentpact_session = None  # type: ignore[attr-defined]
+            async_wrapper._pactrun_session = None  # type: ignore[attr-defined]
             return async_wrapper
         else:
             @functools.wraps(fn)
@@ -192,12 +207,12 @@ class Contract:
                 with self.session() as session:
                     result = fn(*args, **kwargs)
                 if not session.is_compliant:
-                    from agentpact.core.errors import ViolationError
+                    from pactrun.core.errors import ViolationError
                     errors = [v for v in session.violations if v.severity in (Severity.ERROR, Severity.CRITICAL)]
                     if errors:
                         raise ViolationError(errors[0])
                 return result
-            sync_wrapper._agentpact_session = None  # type: ignore[attr-defined]
+            sync_wrapper._pactrun_session = None  # type: ignore[attr-defined]
             return sync_wrapper
 
     # -- Serialization -----------------------------------------------------
@@ -223,11 +238,11 @@ class Contract:
     @classmethod
     def from_yaml(cls, path: str | Path) -> Contract:
         """Load a contract from a YAML file."""
-        from agentpact.loader import load_contract_yaml
+        from pactrun.loader import load_contract_yaml
         return load_contract_yaml(path)
 
     @classmethod
     def from_dict(cls, data: dict) -> Contract:
         """Load a contract from a dictionary."""
-        from agentpact.loader import load_contract_dict
+        from pactrun.loader import load_contract_dict
         return load_contract_dict(data)

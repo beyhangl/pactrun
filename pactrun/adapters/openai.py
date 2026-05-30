@@ -1,11 +1,11 @@
-"""OpenAI adapter — auto-emits events to active agentpact Session.
+"""OpenAI adapter — auto-emits events to active pactrun Session.
 
 Patches ``openai.resources.chat.completions.Completions.create`` so every
 call is automatically recorded into the active Session.
 
 Usage::
 
-    from agentpact.adapters import OpenAIAdapter
+    from pactrun.adapters import OpenAIAdapter
 
     with contract.session() as session:
         with OpenAIAdapter():
@@ -22,11 +22,11 @@ import json
 import time
 from typing import Any
 
-from agentpact.adapters._base import get_session
+from pactrun.adapters._base import get_session
 
 
 class OpenAIAdapter:
-    """Patches OpenAI SDK to auto-emit events to active agentpact Session."""
+    """Patches OpenAI SDK to auto-emit events to active pactrun Session."""
 
     def __init__(self) -> None:
         self._Completions: Any = None
@@ -60,7 +60,7 @@ class OpenAIAdapter:
         except ImportError as exc:
             raise ImportError(
                 "The 'openai' package is required for OpenAIAdapter. "
-                "Install it with: pip install 'agentpact[openai]'"
+                "Install it with: pip install 'pactrun[openai]'"
             ) from exc
 
         self._Completions = Completions

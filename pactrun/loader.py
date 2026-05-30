@@ -7,15 +7,15 @@ from typing import Any
 
 import yaml
 
-from agentpact.core.enums import ClauseKind, OnFail, Severity
-from agentpact.core.errors import ContractLoadError
-from agentpact.core.models import Clause
-from agentpact.predicates.base import get_predicate
+from pactrun.core.enums import ClauseKind, OnFail, Severity
+from pactrun.core.errors import ContractLoadError
+from pactrun.core.models import Clause
+from pactrun.predicates.base import get_predicate
 
 
 def load_contract_yaml(path: str | Path) -> "Contract":
     """Load a Contract from a YAML file."""
-    from agentpact.contract import Contract
+    from pactrun.contract import Contract
 
     path = Path(path)
     if not path.exists():
@@ -35,7 +35,7 @@ def load_contract_yaml(path: str | Path) -> "Contract":
 
 def load_contract_dict(data: dict) -> "Contract":
     """Load a Contract from a dictionary."""
-    from agentpact.contract import Contract
+    from pactrun.contract import Contract
 
     name = data.get("name", "")
     version = data.get("version", "1.0")
@@ -99,7 +99,20 @@ def _parse_clause(data: dict, default_on_fail: OnFail) -> Clause:
 
     severity = Severity(data.get("severity", "critical" if kind == ClauseKind.FORBID else "error"))
     on_fail = OnFail(data.get("on_fail", default_on_fail.value))
-    check_on = data.get("check_on", "session_end" if kind == ClauseKind.POSTCONDITION else "every_event")
+
+    # Resolve when the clause is evaluated. An explicit ``check_on`` always
+    # wins; otherwise pre/postconditions map to their session phase and
+    # require/forbid honor the predicate's own ``_check_on`` hint (so
+    # ``must_call`` / ``tool_order`` / ``output_contains`` defer to session end
+    # instead of failing on the first event).
+    if "check_on" in data:
+        check_on = data["check_on"]
+    elif kind == ClauseKind.POSTCONDITION:
+        check_on = "session_end"
+    elif kind == ClauseKind.PRECONDITION:
+        check_on = "session_start"
+    else:
+        check_on = getattr(predicate_fn, "_check_on", None) or "every_event"
 
     return Clause(
         kind=kind,

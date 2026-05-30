@@ -1,4 +1,4 @@
-"""Anthropic adapter — auto-emits events to active agentpact Session.
+"""Anthropic adapter — auto-emits events to active pactrun Session.
 
 Patches ``anthropic.resources.messages.Messages.create`` so every call
 is automatically recorded into the active Session.
@@ -9,11 +9,11 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from agentpact.adapters._base import get_session
+from pactrun.adapters._base import get_session
 
 
 class AnthropicAdapter:
-    """Patches Anthropic SDK to auto-emit events to active agentpact Session."""
+    """Patches Anthropic SDK to auto-emit events to active pactrun Session."""
 
     def __init__(self) -> None:
         self._Messages: Any = None
@@ -44,7 +44,7 @@ class AnthropicAdapter:
         except ImportError as exc:
             raise ImportError(
                 "The 'anthropic' package is required for AnthropicAdapter. "
-                "Install it with: pip install 'agentpact[anthropic]'"
+                "Install it with: pip install 'pactrun[anthropic]'"
             ) from exc
 
         self._Messages = Messages

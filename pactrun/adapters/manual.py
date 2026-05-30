@@ -2,7 +2,7 @@
 
 Usage::
 
-    from agentpact.adapters.manual import emit_llm_call, emit_tool_call
+    from pactrun.adapters.manual import emit_llm_call, emit_tool_call
 
     with contract.session():
         emit_llm_call(model="gpt-5.4-nano", output="Hello", cost=0.001)
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentpact.adapters._base import get_session
-from agentpact.core.models import Violation
+from pactrun.adapters._base import get_session
+from pactrun.core.models import Violation
 
 
 def emit_llm_call(

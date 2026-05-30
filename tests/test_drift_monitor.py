@@ -2,7 +2,7 @@
 
 import pytest
 
-from agentpact.drift import DriftMonitor, DriftReport
+from pactrun.drift import DriftMonitor, DriftReport
 
 
 class TestDriftMonitor:

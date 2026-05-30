@@ -1,7 +1,7 @@
 """Tests for cost predicates."""
 
 import pytest
-from agentpact import cost_under, cost_per_turn_under, token_budget, Contract
+from pactrun import cost_under, cost_per_turn_under, token_budget, Contract
 
 
 class TestCostUnder:

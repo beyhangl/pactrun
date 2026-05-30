@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agentpact.core.models import Event, PredicateResult, SessionState
-from agentpact.predicates.base import predicate
+from pactrun.core.models import Event, PredicateResult, SessionState
+from pactrun.predicates.base import predicate
 
 
 @predicate("no_loops")

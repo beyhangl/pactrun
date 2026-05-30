@@ -1,11 +1,11 @@
-"""Custom exceptions for agentpact."""
+"""Custom exceptions for pactrun."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agentpact.core.models import Violation
+    from pactrun.core.models import Violation
 
 
 class ViolationError(Exception):

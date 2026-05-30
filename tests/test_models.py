@@ -1,9 +1,9 @@
-"""Tests for agentpact core data models."""
+"""Tests for pactrun core data models."""
 
 import pytest
 
-from agentpact.core.enums import ClauseKind, EventKind, OnFail, Severity
-from agentpact.core.models import (
+from pactrun.core.enums import ClauseKind, EventKind, OnFail, Severity
+from pactrun.core.models import (
     Clause, Event, PredicateResult, SessionState, SessionSummary, Violation,
 )
 

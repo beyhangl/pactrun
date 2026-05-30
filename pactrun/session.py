@@ -19,9 +19,9 @@ import time
 import uuid
 from typing import Any
 
-from agentpact.core.enums import ClauseKind, EventKind, OnFail, Severity
-from agentpact.core.errors import ViolationError
-from agentpact.core.models import (
+from pactrun.core.enums import ClauseKind, EventKind, OnFail, Severity
+from pactrun.core.errors import ViolationError
+from pactrun.core.models import (
     Clause,
     Event,
     PredicateResult,
@@ -33,7 +33,7 @@ from agentpact.core.models import (
 
 # Context variable for the active session
 _active_session: contextvars.ContextVar["Session | None"] = contextvars.ContextVar(
-    "agentpact_session", default=None
+    "pactrun_session", default=None
 )
 
 
@@ -50,7 +50,7 @@ class Session:
     """
 
     def __init__(self, contract: Any, **kwargs: Any) -> None:
-        from agentpact.contract import Contract
+        from pactrun.contract import Contract
         self._contract: Contract = contract
         self._session_id = str(uuid.uuid4())
         self._started_at: float = 0.0

@@ -2,8 +2,8 @@
 
 import pytest
 
-from agentpact import Contract, cost_under, must_not_call, ViolationError
-from agentpact.adapters.manual import emit_llm_call, emit_tool_call
+from pactrun import Contract, cost_under, must_not_call, ViolationError
+from pactrun.adapters.manual import emit_llm_call, emit_tool_call
 
 
 class TestManualEmit:

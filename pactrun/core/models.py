@@ -1,4 +1,4 @@
-"""Core data models for agentpact."""
+"""Core data models for pactrun."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from agentpact.core.enums import ClauseKind, EventKind, OnFail, Severity
+from pactrun.core.enums import ClauseKind, EventKind, OnFail, Severity
 
 
 # ---------------------------------------------------------------------------

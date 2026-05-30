@@ -3,7 +3,7 @@
 import math
 import pytest
 
-from agentpact.drift.detectors import PageHinkleyDetector, EWMADetector
+from pactrun.drift.detectors import PageHinkleyDetector, EWMADetector
 
 
 class TestPageHinkley:

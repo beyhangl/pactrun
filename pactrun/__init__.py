@@ -1,4 +1,4 @@
-"""agentpact — Agent Behavioral Contracts.
+"""pactrun — Agent Behavioral Contracts.
 
 Design-by-Contract for AI agents. Declare what agents must/must not do,
 enforce at runtime, detect behavioral drift, generate compliance docs.
@@ -6,15 +6,15 @@ enforce at runtime, detect behavioral drift, generate compliance docs.
 
 __version__ = "0.1.0"
 
-from agentpact.core.enums import ClauseKind, EventKind, OnFail, Severity
-from agentpact.core.errors import ContractLoadError, ViolationError
-from agentpact.core.models import (
+from pactrun.core.enums import ClauseKind, EventKind, OnFail, Severity
+from pactrun.core.errors import ContractLoadError, ViolationError
+from pactrun.core.models import (
     Clause, Event, PredicateResult, SessionState, SessionSummary, Violation,
 )
-from agentpact.contract import Contract
-from agentpact.session import Session, get_active_session
-from agentpact.predicates.base import predicate, get_predicate, list_predicates
-from agentpact.predicates import (
+from pactrun.contract import Contract
+from pactrun.session import Session, get_active_session
+from pactrun.predicates.base import predicate, get_predicate, list_predicates
+from pactrun.predicates import (
     cost_under, cost_per_turn_under, token_budget,
     must_call, must_not_call, tool_order, tools_allowed, max_tool_calls,
     no_pii, output_contains, output_matches, max_output_length, output_must_not_contain,

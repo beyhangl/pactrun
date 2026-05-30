@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from agentpact.core.models import Event, PredicateResult, SessionState
+from pactrun.core.models import Event, PredicateResult, SessionState
 
 
 # Global registry: name → factory function

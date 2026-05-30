@@ -1,261 +1,292 @@
 <p align="center">
-  <strong>agentpact</strong>
+  <strong>pactrun</strong>
 </p>
-<p align="center">Agent Behavioral Contracts — Design-by-Contract for AI agents.<br>Declare what agents must/must not do. Enforce at runtime. Detect drift. Generate compliance docs.</p>
+<p align="center">Behavioral contracts for AI agents.<br>Put hard limits on an agent's <em>whole run</em> — total cost, tool use, loops, and drift — and enforce them at runtime.</p>
 
 [![License](https://img.shields.io/github/license/beyhangl/agentpact)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9+-blue)](https://pypi.org/project/agentpact/)
+[![Python](https://img.shields.io/badge/python-3.9+-blue)](https://github.com/beyhangl/agentpact)
+[![Status](https://img.shields.io/badge/status-alpha-orange)](#status)
 
 ---
 
 ## What is this?
 
-TypeScript added types to JavaScript. **agentpact adds behavioral types to AI agents.**
-
-Guardrails check individual messages. agentpact checks agent **behavior across entire sessions** — enforcing contracts, detecting drift, triggering recovery, and generating compliance documentation.
+Guardrails check individual **messages**. pactrun checks an agent's behavior across an entire **session** — enforcing limits on accumulated cost, tool usage, call ordering, loops, and drift, and raising (or recording) a violation the moment a contract is broken.
 
 ```python
-from agentpact import contract
+from pactrun import Contract, cost_under, max_turns, no_loops, must_not_call
 
-@contract(
-    preconditions=["user.is_authenticated"],
-    invariants=["no_pii_in_output", "cost < $0.50"],
-    must_call=["verify_identity"],
-    must_not_call=["delete_account"],
-    max_drift=0.15,
-    on_violation="escalate_to_human",
+contract = (
+    Contract("support_agent")
+    .require(cost_under(0.50))                  # whole-run budget
+    .require(max_turns(20))
+    .require(no_loops())                        # catch infinite tool loops
+    .forbid(must_not_call("delete_account"))
+    .on_violation("block")
 )
-async def customer_service_agent(query: str) -> str:
-    ...
+
+with contract.session() as session:
+    session.emit_llm_response(model="gpt-4.1", output="Looking that up…", cost=0.003)
+    session.emit_tool_call("lookup_order", args={"id": "123"})
+    # ... the rest of your agent loop ...
+
+print(session.summary().is_compliant)   # True
 ```
+
+An agent can pass every per-message guardrail and still run up a $50 bill, loop forever, or call a tool it never should. pactrun is the layer that catches **session-level** behavior.
 
 ---
 
-## The Problem
+## Status
 
-**Guardrails check messages. Nobody checks behavior.**
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **166 passing tests**. Several capabilities that belong to the longer-term vision — a CLI, compliance-document export, a full recovery engine, a pytest plugin, more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
-| What exists (guardrails) | What's missing (contracts) |
+| Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
-| "Is this response safe?" | "Has this agent been behaving correctly for the last 20 turns?" |
-| Per-message validation | Session-level behavioral monitoring |
-| Binary pass/fail | Drift detection with tolerance bounds |
-| Block or raise error | Recovery strategies (retry, escalate, fallback) |
-| No composition guarantees | Provable: A satisfies C_A, B satisfies C_B → A→B satisfies C_AB |
-| No compliance output | Generates EU AI Act Annex IV documentation |
-
-An agent can pass every guardrail check on every individual message and still exhibit dangerous **behavioral drift** — gradually increasing costs, slowly deviating from its task, or subtly changing its tool usage patterns over 50+ turns.
-
-agentpact catches this.
-
----
-
-## Key Concepts
-
-### Contract = (Preconditions, Invariants, Governance, Recovery)
-
-```
-Contract
-├── Preconditions    — what must be true BEFORE the agent runs
-├── Invariants       — what must remain true THROUGHOUT the session
-├── Postconditions   — what must be true AFTER the agent finishes
-├── Governance       — policies on tool access, cost, timing
-└── Recovery         — what to do when violations occur
-```
-
-### Session-Level, Not Message-Level
-
-agentpact tracks state across the **entire agent session**. It can express:
-
-- "The agent must authenticate before accessing user data" (temporal ordering)
-- "Cost must not increase by more than 10% per turn on average" (drift bounds)
-- "If the agent deviates, it must self-correct within 3 actions" (recovery)
-
-### Probabilistic Compliance
-
-LLMs are non-deterministic. Contracts define `(p, delta, k)-satisfaction`:
-- The agent satisfies the contract with probability **p**
-- Within drift tolerance **delta**
-- Over **k** actions
-
-This maps directly to SLAs and regulatory requirements.
-
----
-
-## How It's Different
-
-| | NeMo Guardrails | Guardrails AI | Microsoft AGT | **agentpact** |
-|---|---|---|---|---|
-| Scope | Dialog flow | I/O validation | Security policy | **Behavioral contracts** |
-| State | Stateless | Stateless | Per-call | **Session-level** |
-| Drift detection | No | No | No | **Yes** |
-| Recovery specs | No | No | Circuit breakers | **First-class** |
-| Composition | No | No | No | **Formal guarantees** |
-| Compliance docs | No | No | No | **EU AI Act Annex IV** |
-| Stars | 5,934 | 6,641 | 790 | New |
-
----
-
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| **Contract decorator** | `@contract(...)` wraps any agent function with behavioral enforcement |
-| **Built-in predicates** | Cost limits, tool rules, output validation, timing constraints, drift bounds |
-| **Session tracking** | Stateful monitoring across entire agent runs, not just individual messages |
-| **Drift detection** | Detects gradual behavioral changes — cost creep, latency creep, pattern shifts |
-| **Recovery strategies** | Log, warn, block, escalate to human, retry with constraints, fallback agent |
-| **Formal composition** | Compose contracts across multi-agent pipelines with provable guarantees |
-| **Compliance export** | Generate EU AI Act Annex IV documentation from contract specifications |
-| **Framework adapters** | OpenAI, Anthropic, Gemini, LangGraph, Pydantic AI, CrewAI |
-| **YAML contracts** | Declarative contract files for non-code configuration |
-| **CLI tools** | `agentpact init`, `agentpact validate`, `agentpact report` |
-| **pytest plugin** | `@pytest.mark.contracted` marker, contract fixtures, violation assertions |
-| **evalcraft integration** | Uses evalcraft spans and scorers as contract predicates |
+| Fluent `Contract` builder + YAML loader | `pactrun` CLI (`init` / `validate` / `report`) |
+| Session-level runtime enforcement (sync + async) | EU AI Act / compliance document export |
+| 20 built-in predicates (cost, tools, output, timing, behavioral) | Recovery engine beyond `block` / `log` (retry / escalate / fallback) |
+| Drift detection (Page-Hinkley + EWMA) | pytest plugin (`@pytest.mark.contracted`) |
+| OpenAI + Anthropic auto-instrument adapters | LangGraph / CrewAI / Gemini / Pydantic-AI adapters |
+| `@contract.enforce` decorator | Formal multi-agent composition |
 
 ---
 
 ## Install
 
+The package is named **`pactrun`**. A PyPI release is planned (see Roadmap); until then, install from source:
+
 ```bash
-pip install agentpact
+pip install "git+https://github.com/beyhangl/agentpact"
 
-# With framework adapters
-pip install "agentpact[openai]"
-pip install "agentpact[anthropic]"
-pip install "agentpact[langchain]"
+# with the OpenAI adapter extra:
+pip install "git+https://github.com/beyhangl/agentpact#egg=pactrun[openai]"
 
-# Everything
-pip install "agentpact[all]"
+# local development:
+git clone https://github.com/beyhangl/agentpact && cd agentpact
+pip install -e ".[dev]"
+pytest
+```
+
+```python
+import pactrun   # the import name is `pactrun`
 ```
 
 ---
 
-## Quick Start
+## How it works
 
-### 1. Define a contract
+A **Contract** is a set of **clauses**, each evaluated at the right moment in a session:
+
+```
+Contract
+├── precondition   — checked at session start
+├── require        — must hold (per-event, or at session end for ordering/output checks)
+├── forbid         — must never happen (checked per-event)
+└── postcondition  — checked at session end
+```
+
+Predicates that can only be judged once the run is over — `must_call`, `tool_order`, `output_contains`, `output_matches` — automatically defer to **session end**. Everything else (cost, token, loop, latency checks) is evaluated **per event**, so a `block`-mode violation stops the run the instant a limit is crossed.
+
+There are three ways to feed events into a session:
+
+**1. Manually** — call `emit_*` as your agent runs:
 
 ```python
-from agentpact import contract
-
-@contract(
-    must_call=["lookup_order"],
-    must_not_call=["delete_account", "modify_payment"],
-    cost_limit=0.50,
-    max_latency_ms=5000,
-    on_violation="block",
-)
-def support_agent(client, query: str) -> str:
-    return run_agent(client, query)
+with contract.session() as session:
+    session.emit_llm_response(model="gpt-4.1", output="...", cost=0.003, completion_tokens=120)
+    session.emit_tool_call("search", args={"q": "weather"})
+    session.emit_output("Here is your answer.")
 ```
 
-### 2. The contract enforces behavior at runtime
-
-```
-✓ support_agent called lookup_order
-✓ Cost: $0.0003 (limit: $0.50)
-✓ Latency: 1,200ms (limit: 5,000ms)
-✗ VIOLATION: agent called modify_payment (blocked by must_not_call)
-  → Recovery: blocked execution, raised ContractViolation
-```
-
-### 3. Detect drift across sessions
+**2. Auto-instrument** — wrap your provider call in an adapter that emits events for you:
 
 ```python
-from agentpact import DriftMonitor
+import openai
+from pactrun import Contract, cost_under, must_not_call
+from pactrun.adapters import OpenAIAdapter
 
-monitor = DriftMonitor(
-    metric="cost_per_turn",
-    window=10,
-    max_drift_pct=0.15,  # alert if cost grows >15%/turn
-)
+contract = Contract("agent").require(cost_under(0.25)).forbid(must_not_call("transfer_funds"))
+client = openai.OpenAI()
 
-# Feed session data
-for session in daily_sessions:
-    monitor.record(session)
+with contract.session() as session:
+    with OpenAIAdapter():            # patches client.chat.completions.create for the block
+        client.chat.completions.create(
+            model="gpt-5.4-nano",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
 
-report = monitor.check()
-if report.has_drift:
-    print(f"Cost drift detected: {report.slope_pct:+.1%}/turn")
+print(session.summary().total_cost_usd)
 ```
 
-### 4. Generate compliance documentation
+**3. As a decorator** — `@contract.enforce` opens a session around a function (emit events inside it via an adapter or `emit_*`):
 
-```bash
-agentpact report --format markdown --standard eu-ai-act
-# Generates Annex IV technical documentation from your contract specs
+```python
+@contract.enforce
+def run_agent(query: str) -> str:
+    with OpenAIAdapter():
+        ...
+    return answer
+
+run_agent("refund my order")   # raises ViolationError if a block-mode clause is breached
 ```
+
+When a clause set to `block` is violated, pactrun raises `ViolationError`. Other modes (`log`, `warn`) record the violation and let the run continue; you inspect them via `session.violations` and `session.summary()`.
 
 ---
 
-## YAML Contract Format
+## Drift detection
+
+`DriftMonitor` runs streaming change-point detectors (Page-Hinkley or EWMA) over per-turn metrics to flag when an agent's behavior is shifting mid-session — cost creep, token inflation, tool-pattern changes.
+
+```python
+from pactrun.drift import DriftMonitor
+
+monitor = DriftMonitor(threshold=0.3, detector_type="page_hinkley")
+
+for turn in turns:
+    report = monitor.record_turn(
+        cost=turn.cost,
+        tokens=turn.tokens,
+        tool_calls=turn.tool_count,
+    )
+
+if report.is_drifting:
+    print(f"drift detected: score {report.overall_drift_score:.2f} over {report.turn_count} turns")
+```
+
+> Drift detection needs a minimum number of turns before it activates (`min_turns=5` by default) and is most meaningful on longer-running sessions. On short 3–5 turn sessions it deliberately stays quiet.
+
+You can also use `drift_bounds(...)` as an inline predicate inside a contract to fail a run when a turn deviates too far from the session average.
+
+---
+
+## Built-in predicates
+
+All 20 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
+
+| Group | Predicate | What it checks |
+|---|---|---|
+| **Cost** | `cost_under(max_usd)` | session total cost stays under budget |
+| | `cost_per_turn_under(max_usd)` | latest turn's cost under a limit |
+| | `token_budget(max_tokens)` | session total tokens under budget |
+| **Tools** | `must_call(tool)` | tool was called by session end |
+| | `must_not_call(tool)` | tool is never called |
+| | `tool_order(expected, strict=False)` | tools called in a given order |
+| | `tools_allowed(whitelist)` | only whitelisted tools are called |
+| | `max_tool_calls(limit)` | total tool calls capped |
+| **Output** | `no_pii()` | no email / SSN / phone / card number in output |
+| | `output_contains(substring, case_sensitive=True)` | final output contains a string |
+| | `output_matches(pattern)` | final output matches a regex |
+| | `max_output_length(max_chars)` | output length capped |
+| | `output_must_not_contain(pattern)` | output does not match a forbidden regex |
+| **Timing** | `max_latency(max_ms)` | no single event exceeds a latency |
+| | `session_timeout(max_ms)` | whole session completes within a time budget |
+| | `max_turns(n)` | session does not exceed N turns |
+| **Behavioral** | `no_loops(window=5, threshold=0.8)` | recent tool calls aren't a repeating loop |
+| | `max_retries(n, tool=None)` | no more than N consecutive identical tool calls |
+| | `drift_bounds(cost_pct=None, tokens_pct=None)` | per-turn metrics stay within N% of the session average |
+| | `no_repeated_output(window=3)` | agent doesn't repeat identical outputs |
+
+Custom predicates are a small function — register one with `@predicate("my_check")` returning a `(event, state) -> PredicateResult` checker.
+
+---
+
+## YAML contracts
+
+Contracts can be declared as data and loaded with `Contract.from_yaml(...)`:
 
 ```yaml
 # contracts/support_agent.yaml
 name: support_agent
 version: "1.0"
-description: Customer support agent for ShopEasy
+description: Customer support agent
+on_fail: block
 
-preconditions:
-  - user.is_authenticated
-  - user.has_active_session
-
-invariants:
-  - no_pii_in_output
-  - cost < 0.50
-  - latency_per_turn < 3000
-
-governance:
-  must_call:
-    - lookup_order
-  must_not_call:
-    - delete_account
-    - modify_payment
-    - access_admin_panel
-  max_turns: 20
-  max_total_cost: 1.00
-
-recovery:
-  on_violation: escalate_to_human
-  max_retries: 2
-  fallback: safe_response_agent
-
-compliance:
-  standard: eu-ai-act
-  risk_tier: limited
-  human_oversight: required_on_violation
+clauses:
+  - require: cost_under
+    args: { max_usd: 0.50 }
+  - require: must_call
+    args: { tool: lookup_order }
+  - require: max_turns
+    args: { n: 20 }
+  - forbid: must_not_call
+    args: { tool: delete_account }
+    on_fail: block
+  - require: no_pii
+    severity: warning
+    on_fail: warn
 ```
 
----
+```python
+from pactrun import Contract
+contract = Contract.from_yaml("contracts/support_agent.yaml")
+```
 
-## Academic References
-
-This project is grounded in peer-reviewed research on agent behavioral specification and runtime enforcement:
-
-| Paper | Venue | Key Contribution |
-|-------|-------|-----------------|
-| [Agent Behavioral Contracts (ABC)](https://arxiv.org/abs/2602.22302) | arXiv, Feb 2026 | Formal framework mapping Design-by-Contract to agents. `(p, delta, k)-satisfaction` with drift bounds. AgentAssert prototype detected 5.2-6.8x more violations than uncontracted agents. |
-| [AgentSpec](https://arxiv.org/abs/2503.18666) | ICSE 2026 | Lightweight DSL for runtime constraints. 90%+ prevention rate, sub-ms overhead. Auto-generates rules via LLM with 95.56% precision. |
-| [Pro2Guard](https://arxiv.org/abs/2508.00500) | arXiv, Aug 2025 | Predictive enforcement using DTMCs. Anticipates violations before they happen using learned execution traces. |
-| [Agent-C](https://arxiv.org/abs/2512.23738) | arXiv, Dec 2025 | Temporal safety constraints via SMT solving. 100% conformance on customer service and airline benchmarks. |
-| [Runtime Governance: Policies on Paths](https://arxiv.org/abs/2603.16586) | arXiv, Mar 2026 | Execution path as governance object. Shows prompt-level instructions and static ACLs are special cases of path policies. |
-| [Agent Contracts (Resource-Bounded)](https://arxiv.org/abs/2601.08815) | COINE/AAMAS 2026 | Unifies resource, temporal, and quality governance with conservation laws for multi-agent delegation. |
-| [DbC Neurosymbolic Layer](https://arxiv.org/abs/2508.03665) | arXiv, Aug 2025 | Contract layer mediating every LLM call with semantic requirements and probabilistic remediation. |
+Each clause names a predicate (`require` / `forbid` / `precondition` / `postcondition`), its `args`, and optionally `severity`, `on_fail`, and `check_on`.
 
 ---
 
-## Relationship to Evalcraft
+## How pactrun fits
 
-agentpact is the **runtime enforcement** companion to [evalcraft](https://github.com/beyhangl/evalcraft) (the testing companion):
+pactrun is intentionally small, dependency-light, and framework-agnostic. It is **complementary to** — not a replacement for — your agent framework and observability stack.
 
-| | evalcraft | agentpact |
+| Tool | Focus | Scope |
+|---|---|---|
+| NeMo Guardrails | dialog flows / topical rails (Colang) | per message |
+| Guardrails AI | input/output validation, structured output | per message |
+| Microsoft Agent Governance Toolkit | enterprise governance, policy, drift, compliance evidence | per call + platform |
+| LangGraph / LangSmith | durable agent state + tracing / evals | session state + observability |
+| **pactrun** | session-accumulated limits (cost / turns / tool-order / loops) + statistical drift, as a tiny `@contract` | whole session, any provider |
+
+*Star counts and capabilities of other projects change quickly; check their repos for current status. pactrun does not claim to be the only tool that does drift or session-level work — several of the above do parts of it. What pactrun offers is a single, declarative, framework-agnostic contract over an agent's entire run, with no heavy platform to adopt.*
+
+---
+
+## Roadmap
+
+Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`):
+
+- **Recovery engine** — `retry` (with constraints), `escalate` (webhook / human), `fallback` (to a safe agent). Today only `block` / `log` / `warn` are active.
+- **CLI** — `pactrun init` / `validate` / `report`.
+- **More adapters** — LangGraph, CrewAI, Gemini, Pydantic AI (today: OpenAI, Anthropic, manual).
+- **pytest plugin** — `@pytest.mark.contracted`, session fixtures.
+- **Compliance export** — mapping contract specs to EU AI Act Annex IV / OWASP Agentic Top-10 evidence. (This produces *machine-readable inputs* to a technical file, not a complete compliance package.)
+- **Formal composition** — provable composition of contracts across multi-agent pipelines. This is a research direction, not a current feature.
+
+Contributions toward any of these are very welcome.
+
+---
+
+## Research background
+
+pactrun is an independent implementation informed by recent work on agent behavioral specification and runtime enforcement. These papers shaped the design; pactrun is **not** an official implementation of any of them, and the ideas it borrows (e.g. probabilistic `(p, δ, k)`-satisfaction, formal composition) are partly on the [Roadmap](#roadmap) rather than shipped.
+
+| Paper | Venue | Note |
+|-------|-------|------|
+| [Agent Behavioral Contracts (ABC)](https://arxiv.org/abs/2602.22302) | arXiv preprint, Feb 2026 | Maps Design-by-Contract to agents; defines `(p, δ, k)`-satisfaction. Its AgentAssert prototype reports detecting **5.2–6.8 soft violations per session** that uncontracted baselines miss. |
+| [AgentSpec](https://arxiv.org/abs/2503.18666) | **ICSE 2026** (peer-reviewed) | DSL for runtime constraints; >90% prevention, ~95.56% precision for auto-generated rules. |
+| [Agent Contracts (Resource-Bounded)](https://arxiv.org/abs/2601.08815) | **COINE / AAMAS 2026 workshop** | Unifies resource, temporal, and quality governance for multi-agent delegation. |
+| [Pro2Guard](https://arxiv.org/abs/2508.00500) | arXiv preprint, Aug 2025 | Predictive enforcement via DTMCs (later revised as "ProbGuard"). |
+| [Agent-C](https://arxiv.org/abs/2512.23738) | arXiv preprint, Dec 2025 | Temporal safety constraints via SMT solving. |
+| [Runtime Governance: Policies on Paths](https://arxiv.org/abs/2603.16586) | arXiv preprint, Mar 2026 | Treats the execution path as a governance object. |
+| [DbC Neurosymbolic Layer](https://arxiv.org/abs/2508.03665) | arXiv preprint, Aug 2025 | A contract layer mediating LLM calls with probabilistic remediation. |
+
+*Most of the above are preprints; AgentSpec and Agent Contracts are peer-reviewed. Quantitative figures are the original authors'.*
+
+---
+
+## Relationship to evalcraft
+
+pactrun is the **runtime-enforcement** companion to [evalcraft](https://github.com/beyhangl/evalcraft) (the **testing** companion):
+
+| | evalcraft | pactrun |
 |---|---|---|
 | When | Post-hoc (after the run) | Real-time (during the run) |
-| What | "Did the agent behave correctly?" | "Is the agent behaving correctly right now?" |
+| Question | "Did the agent behave correctly?" | "Is the agent behaving correctly right now?" |
 | How | Cassette replay + assertions | Contract enforcement + drift detection |
-| Analogy | pytest | mypy / TypeScript |
 
-They share infrastructure: agentpact can use evalcraft's span capture, scorers, and framework adapters as building blocks.
+They share design patterns (`contextvars`-based session tracking, the same dependency stack) and are intended to converge on a single contract artifact you can both test offline and enforce online.
 
 ---
 
@@ -265,10 +296,10 @@ They share infrastructure: agentpact can use evalcraft's span capture, scorers, 
 git clone https://github.com/beyhangl/agentpact
 cd agentpact
 pip install -e ".[dev]"
-pytest
+pytest        # 166 tests
 ```
 
-PRs welcome. Please open an issue first for significant changes.
+PRs welcome — please open an issue first for significant changes.
 
 ---
 

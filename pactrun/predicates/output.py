@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 
-from agentpact.core.enums import EventKind
-from agentpact.core.models import Event, PredicateResult, SessionState
-from agentpact.predicates.base import predicate
+from pactrun.core.enums import EventKind
+from pactrun.core.models import Event, PredicateResult, SessionState
+from pactrun.predicates.base import predicate
 
 
 _PII_PATTERNS = [

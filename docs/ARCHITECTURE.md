@@ -1,10 +1,10 @@
-# agentpact Architecture
+# pactrun Architecture
 
 ## Design Philosophy
 
-agentpact is "Design by Contract for AI agents" — inspired by Bertrand Meyer's DbC in Eiffel, not input/output guardrails.
+pactrun is "Design by Contract for AI agents" — inspired by Bertrand Meyer's DbC in Eiffel, not input/output guardrails.
 
-| | Guardrails (NeMo, Guardrails AI) | agentpact |
+| | Guardrails (NeMo, Guardrails AI) | pactrun |
 |---|---|---|
 | Scope | Per-message filtering | Session-level behavioral specification |
 | State | Stateless | Stateful — tracks cumulative behavior |
@@ -16,7 +16,7 @@ agentpact is "Design by Contract for AI agents" — inspired by Bertrand Meyer's
 ## Module Structure
 
 ```
-agentpact/
+pactrun/
 ├── core/           # Contract, Clause, Violation, Session, Types
 ├── clauses/        # Built-in clause factories (cost, tools, output, timing, tokens, content, sequence)
 ├── enforcement/    # Runtime enforcement engine with hook points

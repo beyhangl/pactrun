@@ -1,4 +1,4 @@
-"""Core enumerations for agentpact."""
+"""Core enumerations for pactrun."""
 
 from enum import Enum
 

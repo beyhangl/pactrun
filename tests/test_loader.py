@@ -1,9 +1,9 @@
-"""Tests for agentpact YAML/dict contract loader."""
+"""Tests for pactrun YAML/dict contract loader."""
 
 import pytest
 
-from agentpact import Contract, ContractLoadError, PredicateResult
-from agentpact.predicates.base import predicate, _PREDICATE_REGISTRY
+from pactrun import Contract, ContractLoadError, PredicateResult
+from pactrun.predicates.base import predicate, _PREDICATE_REGISTRY
 
 
 # Register a test predicate
@@ -112,12 +112,12 @@ clauses:
 
 class TestPredicateRegistry:
     def test_registered_predicates(self):
-        from agentpact.predicates.base import list_predicates
+        from pactrun.predicates.base import list_predicates
         names = list_predicates()
         assert "test_cost_under" in names
         assert "test_must_not_call" in names
 
     def test_get_unknown_raises(self):
-        from agentpact.predicates.base import get_predicate
+        from pactrun.predicates.base import get_predicate
         with pytest.raises(KeyError, match="Unknown predicate"):
             get_predicate("does_not_exist")

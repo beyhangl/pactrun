@@ -1,8 +1,8 @@
-"""Core types and models for agentpact."""
+"""Core types and models for pactrun."""
 
-from agentpact.core.enums import ClauseKind, EventKind, OnFail, Severity
-from agentpact.core.errors import ContractLoadError, SessionError, ViolationError
-from agentpact.core.models import (
+from pactrun.core.enums import ClauseKind, EventKind, OnFail, Severity
+from pactrun.core.errors import ContractLoadError, SessionError, ViolationError
+from pactrun.core.models import (
     Clause,
     Event,
     PredicateResult,

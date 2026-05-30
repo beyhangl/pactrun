@@ -5,7 +5,7 @@ when an agent's behavior is shifting mid-session.
 
 Usage::
 
-    from agentpact.drift import DriftMonitor
+    from pactrun.drift import DriftMonitor
 
     monitor = DriftMonitor(threshold=0.3)
     for turn_data in session_turns:
@@ -21,8 +21,8 @@ Usage::
 
 from __future__ import annotations
 
-from agentpact.drift.detectors import EWMADetector, PageHinkleyDetector
-from agentpact.drift.metrics import DriftMetric, DriftReport
+from pactrun.drift.detectors import EWMADetector, PageHinkleyDetector
+from pactrun.drift.metrics import DriftMetric, DriftReport
 
 
 _DEFAULT_METRICS = [
