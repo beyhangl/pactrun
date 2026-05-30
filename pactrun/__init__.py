@@ -1,7 +1,7 @@
-"""pactrun — Agent Behavioral Contracts.
+"""pactrun — behavioral contracts for AI agents.
 
-Design-by-Contract for AI agents. Declare what agents must/must not do,
-enforce at runtime, detect behavioral drift, generate compliance docs.
+Declare what an agent must / must not do across a whole session — cost, tool,
+output, timing, and drift limits — and enforce them at runtime.
 """
 
 __version__ = "0.1.0"
@@ -13,6 +13,7 @@ from pactrun.core.models import (
 )
 from pactrun.contract import Contract
 from pactrun.session import Session, get_active_session
+from pactrun.recovery import EscalationError, RetrySignal, FallbackSignal
 from pactrun.predicates.base import predicate, get_predicate, list_predicates
 from pactrun.predicates import (
     cost_under, cost_per_turn_under, token_budget,
@@ -25,6 +26,7 @@ from pactrun.predicates import (
 __all__ = [
     "ClauseKind", "EventKind", "OnFail", "Severity",
     "ContractLoadError", "ViolationError",
+    "EscalationError", "RetrySignal", "FallbackSignal",
     "Clause", "Event", "PredicateResult", "SessionState", "SessionSummary", "Violation",
     "Contract", "Session", "get_active_session",
     "predicate", "get_predicate", "list_predicates",

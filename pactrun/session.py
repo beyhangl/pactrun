@@ -19,8 +19,7 @@ import time
 import uuid
 from typing import Any
 
-from pactrun.core.enums import ClauseKind, EventKind, OnFail, Severity
-from pactrun.core.errors import ViolationError
+from pactrun.core.enums import ClauseKind, EventKind, Severity
 from pactrun.core.models import (
     Clause,
     Event,
@@ -29,6 +28,7 @@ from pactrun.core.models import (
     SessionSummary,
     Violation,
 )
+from pactrun.recovery.engine import apply_recovery
 
 
 # Context variable for the active session
@@ -60,6 +60,11 @@ class Session:
         self._violations: list[Violation] = []
         self._token: contextvars.Token | None = None
         self._metadata = kwargs.get("metadata", {})
+        # Optional handler invoked for `escalate`-action violations. Falls back
+        # to one configured on the contract via Contract.on_escalate(...).
+        self._escalation_handler = kwargs.get("escalation_handler") or getattr(
+            contract, "escalation_handler", None
+        )
 
     # -- Properties --------------------------------------------------------
 
@@ -271,9 +276,9 @@ class Session:
         )
         self._violations.append(violation)
 
-        # Handle on_fail action
-        if clause.on_fail == OnFail.BLOCK:
-            raise ViolationError(violation)
+        # Route to the recovery action (log / warn / block / escalate / retry /
+        # fallback). Halting and control-flow actions raise; log/warn return.
+        apply_recovery(violation, escalation_handler=self._escalation_handler)
 
         return violation
 

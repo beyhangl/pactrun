@@ -39,16 +39,17 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **166 passing tests**. Several capabilities that belong to the longer-term vision — a CLI, compliance-document export, a full recovery engine, a pytest plugin, more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **175 passing tests**. Several capabilities that belong to the longer-term vision — a CLI, compliance-document export, a pytest plugin, more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | Fluent `Contract` builder + YAML loader | `pactrun` CLI (`init` / `validate` / `report`) |
 | Session-level runtime enforcement (sync + async) | EU AI Act / compliance document export |
-| 20 built-in predicates (cost, tools, output, timing, behavioral) | Recovery engine beyond `block` / `log` (retry / escalate / fallback) |
-| Drift detection (Page-Hinkley + EWMA) | pytest plugin (`@pytest.mark.contracted`) |
-| OpenAI + Anthropic auto-instrument adapters | LangGraph / CrewAI / Gemini / Pydantic-AI adapters |
-| `@contract.enforce` decorator | Formal multi-agent composition |
+| 20 built-in predicates (cost, tools, output, timing, behavioral) | pytest plugin (`@pytest.mark.contracted`) |
+| Recovery: log / warn / block / escalate / retry / fallback | LangGraph / CrewAI / Gemini / Pydantic-AI adapters |
+| Drift detection (Page-Hinkley + EWMA) | Formal multi-agent composition |
+| OpenAI + Anthropic auto-instrument adapters | |
+| `@contract.enforce` decorator | |
 
 ---
 
@@ -161,6 +162,45 @@ You can also use `drift_bounds(...)` as an inline predicate inside a contract to
 
 ---
 
+## Recovery actions
+
+Every clause has an `on_fail` action (set per-clause via `on_fail=...`, or for the whole contract via `.on_violation(...)`). When the clause is violated, pactrun reacts:
+
+| Action | What happens |
+|---|---|
+| `log` | record the violation and continue |
+| `warn` | record + emit a `UserWarning`, then continue |
+| `block` | record + raise `ViolationError`, halting the run immediately |
+| `escalate` | record + call an escalation handler (page a human / webhook), then raise `EscalationError` |
+| `retry` | under `@contract.enforce`, re-run the wrapped call up to `max_retries` times |
+| `fallback` | under `@contract.enforce`, call a registered fallback function instead |
+
+```python
+from pactrun import Contract, cost_under, get_active_session
+
+# Retry the agent up to 3 times if it busts the budget; fall back if it keeps failing.
+def safe_agent(*args, **kwargs):
+    return "served by the safe fallback agent"
+
+contract = (
+    Contract("resilient_agent")
+    .require(cost_under(0.05), on_fail="retry")
+    .with_retries(3)
+    .fallback(safe_agent)
+)
+
+# Or escalate to a human/webhook and halt:
+contract = (
+    Contract("supervised_agent")
+    .require(cost_under(0.05), on_fail="escalate")
+    .on_escalate(lambda v: notify_oncall(v.message))
+)
+```
+
+`retry` and `fallback` are control-flow actions handled by `@contract.enforce` (which owns the call); outside the decorator they surface as `RetrySignal` / `FallbackSignal` for you to handle. See [`examples/recovery.py`](examples/recovery.py).
+
+---
+
 ## Built-in predicates
 
 All 20 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
@@ -247,7 +287,6 @@ pactrun is intentionally small, dependency-light, and framework-agnostic. It is 
 
 Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`):
 
-- **Recovery engine** — `retry` (with constraints), `escalate` (webhook / human), `fallback` (to a safe agent). Today only `block` / `log` / `warn` are active.
 - **CLI** — `pactrun init` / `validate` / `report`.
 - **More adapters** — LangGraph, CrewAI, Gemini, Pydantic AI (today: OpenAI, Anthropic, manual).
 - **pytest plugin** — `@pytest.mark.contracted`, session fixtures.
@@ -296,7 +335,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/agentpact
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 166 tests
+pytest        # 175 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.

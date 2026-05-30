@@ -50,6 +50,12 @@ class Contract:
     default_on_fail: OnFail = OnFail.BLOCK
     metadata: dict = field(default_factory=dict)
 
+    # Recovery configuration (used by @enforce for `retry` / `fallback` actions
+    # and by sessions for `escalate`). Not serialized.
+    max_retries: int = 0
+    fallback_fn: Callable | None = None
+    escalation_handler: Callable | None = None
+
     # -- Fluent builder API ------------------------------------------------
 
     def require(
@@ -165,6 +171,21 @@ class Contract:
         self.default_on_fail = action
         return self
 
+    def with_retries(self, n: int) -> Contract:
+        """Max times ``@enforce`` re-runs the wrapped call on a `retry`-action violation."""
+        self.max_retries = n
+        return self
+
+    def fallback(self, fn: Callable) -> Contract:
+        """Register a fallback callable for `fallback`-action violations under ``@enforce``."""
+        self.fallback_fn = fn
+        return self
+
+    def on_escalate(self, handler: Callable) -> Contract:
+        """Register a handler invoked when an `escalate`-action clause is violated."""
+        self.escalation_handler = handler
+        return self
+
     # -- Query API ---------------------------------------------------------
 
     def get_clauses(self, *, kind: ClauseKind | None = None, check_on: str | None = None) -> list[Clause]:
@@ -184,35 +205,63 @@ class Contract:
         return Session(self, **kwargs)
 
     def enforce(self, fn: Callable) -> Callable:
-        """Decorator that wraps a function with contract enforcement."""
+        """Wrap a function so each call runs under this contract.
+
+        A fresh :class:`~pactrun.session.Session` is opened around the call
+        (emit events inside it via an adapter or ``session.emit_*``). Recovery
+        actions are honored:
+
+        - ``block`` / ``escalate`` violations raise out of the call.
+        - ``retry`` violations re-run the function up to :attr:`max_retries`
+          times, then raise.
+        - ``fallback`` violations call :attr:`fallback_fn` and return its result
+          (or raise if none is registered).
+        - ``log`` / ``warn`` violations are recorded and the call returns
+          normally; inspect them via the active session.
+        """
         import asyncio
         import functools
+
+        from pactrun.core.errors import ViolationError
+        from pactrun.recovery.engine import FallbackSignal, RetrySignal
 
         if asyncio.iscoroutinefunction(fn):
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                with self.session() as session:
-                    result = await fn(*args, **kwargs)
-                if not session.is_compliant:
-                    from pactrun.core.errors import ViolationError
-                    errors = [v for v in session.violations if v.severity in (Severity.ERROR, Severity.CRITICAL)]
-                    if errors:
-                        raise ViolationError(errors[0])
-                return result
-            async_wrapper._pactrun_session = None  # type: ignore[attr-defined]
+                attempts = 0
+                while True:
+                    try:
+                        with self.session():
+                            return await fn(*args, **kwargs)
+                    except RetrySignal as sig:
+                        attempts += 1
+                        if attempts > self.max_retries:
+                            raise ViolationError(sig.violation) from None
+                        continue
+                    except FallbackSignal as sig:
+                        if self.fallback_fn is None:
+                            raise ViolationError(sig.violation) from None
+                        if asyncio.iscoroutinefunction(self.fallback_fn):
+                            return await self.fallback_fn(*args, **kwargs)
+                        return self.fallback_fn(*args, **kwargs)
             return async_wrapper
         else:
             @functools.wraps(fn)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-                with self.session() as session:
-                    result = fn(*args, **kwargs)
-                if not session.is_compliant:
-                    from pactrun.core.errors import ViolationError
-                    errors = [v for v in session.violations if v.severity in (Severity.ERROR, Severity.CRITICAL)]
-                    if errors:
-                        raise ViolationError(errors[0])
-                return result
-            sync_wrapper._pactrun_session = None  # type: ignore[attr-defined]
+                attempts = 0
+                while True:
+                    try:
+                        with self.session():
+                            return fn(*args, **kwargs)
+                    except RetrySignal as sig:
+                        attempts += 1
+                        if attempts > self.max_retries:
+                            raise ViolationError(sig.violation) from None
+                        continue
+                    except FallbackSignal as sig:
+                        if self.fallback_fn is None:
+                            raise ViolationError(sig.violation) from None
+                        return self.fallback_fn(*args, **kwargs)
             return sync_wrapper
 
     # -- Serialization -----------------------------------------------------
