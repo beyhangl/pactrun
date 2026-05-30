@@ -12,4 +12,7 @@ def __getattr__(name: str):
     if name == "AnthropicAdapter":
         from pactrun.adapters.anthropic import AnthropicAdapter
         return AnthropicAdapter
+    if name == "PactrunCallbackHandler":
+        from pactrun.adapters.langchain import PactrunCallbackHandler
+        return PactrunCallbackHandler
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

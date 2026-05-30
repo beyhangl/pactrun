@@ -39,16 +39,16 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **187 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **194 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, a few more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | Fluent `Contract` builder + YAML loader | EU AI Act / compliance document export |
-| Session-level runtime enforcement (sync + async) | LangGraph / CrewAI / Gemini / Pydantic-AI adapters |
+| Session-level runtime enforcement (sync + async) | CrewAI / Gemini / Pydantic-AI adapters |
 | 20 built-in predicates (cost, tools, output, timing, behavioral) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / retry / fallback | |
 | Drift detection (Page-Hinkley + EWMA) | |
-| OpenAI + Anthropic auto-instrument adapters | |
+| OpenAI + Anthropic + LangChain/LangGraph adapters | |
 | `@contract.enforce` decorator | |
 | CLI (`init` / `validate` / `show` / `predicates`) | |
 | pytest plugin (`@pytest.mark.contracted`) | |
@@ -135,6 +135,25 @@ run_agent("refund my order")   # raises ViolationError if a block-mode clause is
 ```
 
 When a clause set to `block` is violated, pactrun raises `ViolationError`. Other modes (`log`, `warn`) record the violation and let the run continue; you inspect them via `session.violations` and `session.summary()`.
+
+### LangChain / LangGraph
+
+LangChain and LangGraph instrument via callbacks, so pactrun ships a `PactrunCallbackHandler` you pass through the run config. It records every LLM and tool event the graph produces into the active session:
+
+```python
+from pactrun import Contract, cost_under, max_turns
+from pactrun.adapters import PactrunCallbackHandler
+
+contract = Contract("graph_agent").require(cost_under(0.50)).require(max_turns(15))
+handler = PactrunCallbackHandler()
+
+with contract.session() as session:
+    graph.invoke(state, config={"callbacks": [handler]})   # any LangGraph graph or LangChain runnable
+
+print(session.summary().is_compliant)
+```
+
+For async or multi-threaded runs where the active-session contextvar may not propagate to the callback, pass the session explicitly: `PactrunCallbackHandler(session=session)`.
 
 ---
 
@@ -315,7 +334,7 @@ pactrun is intentionally small, dependency-light, and framework-agnostic. It is 
 
 Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`):
 
-- **More adapters** — LangGraph, CrewAI, Gemini, Pydantic AI (today: OpenAI, Anthropic, manual).
+- **More adapters** — CrewAI, Gemini, Pydantic AI (today: OpenAI, Anthropic, manual, LangChain/LangGraph).
 - **Compliance export** — mapping contract specs to EU AI Act Annex IV / OWASP Agentic Top-10 evidence. (This produces *machine-readable inputs* to a technical file, not a complete compliance package.)
 - **Formal composition** — provable composition of contracts across multi-agent pipelines. This is a research direction, not a current feature.
 
@@ -385,7 +404,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/agentpact
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 187 tests
+pytest        # 194 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.
