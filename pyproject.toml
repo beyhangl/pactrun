@@ -57,6 +57,9 @@ dev = [
 [project.scripts]
 pactrun = "pactrun.cli.main:cli"
 
+[project.entry-points.pytest11]
+pactrun = "pactrun.pytest_plugin.plugin"
+
 [project.urls]
 Homepage = "https://github.com/beyhangl/agentpact"
 Repository = "https://github.com/beyhangl/agentpact"

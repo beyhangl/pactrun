@@ -39,18 +39,19 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **182 passing tests**. Several capabilities that belong to the longer-term vision — compliance-document export, a pytest plugin, more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **187 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | Fluent `Contract` builder + YAML loader | EU AI Act / compliance document export |
-| Session-level runtime enforcement (sync + async) | pytest plugin (`@pytest.mark.contracted`) |
-| 20 built-in predicates (cost, tools, output, timing, behavioral) | LangGraph / CrewAI / Gemini / Pydantic-AI adapters |
-| Recovery: log / warn / block / escalate / retry / fallback | Formal multi-agent composition |
+| Session-level runtime enforcement (sync + async) | LangGraph / CrewAI / Gemini / Pydantic-AI adapters |
+| 20 built-in predicates (cost, tools, output, timing, behavioral) | Formal multi-agent composition |
+| Recovery: log / warn / block / escalate / retry / fallback | |
 | Drift detection (Page-Hinkley + EWMA) | |
 | OpenAI + Anthropic auto-instrument adapters | |
 | `@contract.enforce` decorator | |
 | CLI (`init` / `validate` / `show` / `predicates`) | |
+| pytest plugin (`@pytest.mark.contracted`) | |
 
 ---
 
@@ -315,7 +316,6 @@ pactrun is intentionally small, dependency-light, and framework-agnostic. It is 
 Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`):
 
 - **More adapters** — LangGraph, CrewAI, Gemini, Pydantic AI (today: OpenAI, Anthropic, manual).
-- **pytest plugin** — `@pytest.mark.contracted`, session fixtures.
 - **Compliance export** — mapping contract specs to EU AI Act Annex IV / OWASP Agentic Top-10 evidence. (This produces *machine-readable inputs* to a technical file, not a complete compliance package.)
 - **Formal composition** — provable composition of contracts across multi-agent pipelines. This is a research direction, not a current feature.
 
@@ -341,6 +341,30 @@ pactrun is an independent implementation informed by recent work on agent behavi
 
 ---
 
+## Testing your agents (pytest plugin)
+
+Installing pactrun registers a pytest plugin. Mark a test with a contract and it runs under enforcement — `block` violations fail the test as they happen, and any other recorded violation fails it at the end with a clear message:
+
+```python
+import pytest
+from pactrun import Contract, cost_under, must_not_call
+
+budget = (
+    Contract("support_agent")
+    .require(cost_under(0.50))
+    .forbid(must_not_call("delete_account"))
+)
+
+@pytest.mark.contracted(budget)
+def test_support_agent(pact_session):
+    run_my_agent(pact_session)        # emit events via the active session / an adapter
+    # no assert needed — the contract is checked automatically
+```
+
+The `pact_session` fixture gives you the active `Session` to emit into (or let an adapter do it). At the end of the run you get a one-line summary: `pactrun: N contracted test(s), M with violations`. This is the same `Contract` object you enforce in production — write it once, test offline and enforce online.
+
+---
+
 ## Relationship to evalcraft
 
 pactrun is the **runtime-enforcement** companion to [evalcraft](https://github.com/beyhangl/evalcraft) (the **testing** companion):
@@ -361,7 +385,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/agentpact
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 182 tests
+pytest        # 187 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.
