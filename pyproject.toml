@@ -37,11 +37,13 @@ dependencies = [
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.30"]
 langchain = ["langchain-core>=0.2"]
+gemini = ["google-genai>=1.0"]
 evalcraft = ["evalcraft>=0.1.0"]
 all = [
     "openai>=1.0",
     "anthropic>=0.30",
     "langchain-core>=0.2",
+    "google-genai>=1.0",
     "evalcraft>=0.1.0",
 ]
 dev = [

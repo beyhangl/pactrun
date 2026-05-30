@@ -15,4 +15,7 @@ def __getattr__(name: str):
     if name == "PactrunCallbackHandler":
         from pactrun.adapters.langchain import PactrunCallbackHandler
         return PactrunCallbackHandler
+    if name == "GeminiAdapter":
+        from pactrun.adapters.gemini import GeminiAdapter
+        return GeminiAdapter
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
