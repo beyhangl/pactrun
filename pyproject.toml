@@ -54,9 +54,8 @@ dev = [
     "twine>=5.0",
 ]
 
-# NOTE: A console-script entry point (`pactrun = "pactrun.cli.main:cli"`) will
-# be added when the CLI ships. It is intentionally omitted until then so the
-# installed package never exposes a command that errors. See README "Roadmap".
+[project.scripts]
+pactrun = "pactrun.cli.main:cli"
 
 [project.urls]
 Homepage = "https://github.com/beyhangl/agentpact"

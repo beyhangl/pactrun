@@ -39,17 +39,18 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **175 passing tests**. Several capabilities that belong to the longer-term vision — a CLI, compliance-document export, a pytest plugin, more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **182 passing tests**. Several capabilities that belong to the longer-term vision — compliance-document export, a pytest plugin, more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
-| Fluent `Contract` builder + YAML loader | `pactrun` CLI (`init` / `validate` / `report`) |
-| Session-level runtime enforcement (sync + async) | EU AI Act / compliance document export |
-| 20 built-in predicates (cost, tools, output, timing, behavioral) | pytest plugin (`@pytest.mark.contracted`) |
-| Recovery: log / warn / block / escalate / retry / fallback | LangGraph / CrewAI / Gemini / Pydantic-AI adapters |
-| Drift detection (Page-Hinkley + EWMA) | Formal multi-agent composition |
+| Fluent `Contract` builder + YAML loader | EU AI Act / compliance document export |
+| Session-level runtime enforcement (sync + async) | pytest plugin (`@pytest.mark.contracted`) |
+| 20 built-in predicates (cost, tools, output, timing, behavioral) | LangGraph / CrewAI / Gemini / Pydantic-AI adapters |
+| Recovery: log / warn / block / escalate / retry / fallback | Formal multi-agent composition |
+| Drift detection (Page-Hinkley + EWMA) | |
 | OpenAI + Anthropic auto-instrument adapters | |
 | `@contract.enforce` decorator | |
+| CLI (`init` / `validate` / `show` / `predicates`) | |
 
 ---
 
@@ -267,6 +268,32 @@ Each clause names a predicate (`require` / `forbid` / `precondition` / `postcond
 
 ---
 
+## CLI
+
+Installing pactrun adds a `pactrun` command:
+
+```bash
+pactrun init --name support_agent      # scaffold contracts/support_agent.yaml
+pactrun validate contracts/            # validate one file or a whole directory
+pactrun show contracts/support_agent.yaml   # pretty-print a contract's clauses
+pactrun predicates                     # list the 20 built-in predicates
+```
+
+```text
+$ pactrun show contracts/support_agent.yaml
+support_agent  v1.0
+default on_fail: block
+
+┏━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━┓
+┃ kind    ┃ predicate     ┃ check_on    ┃ severity ┃ on_fail ┃
+┡━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━┩
+│ require │ cost_under    │ every_event │ error    │ block   │
+│ forbid  │ must_not_call │ every_event │ critical │ block   │
+└─────────┴───────────────┴─────────────┴──────────┴─────────┘
+```
+
+---
+
 ## How pactrun fits
 
 pactrun is intentionally small, dependency-light, and framework-agnostic. It is **complementary to** — not a replacement for — your agent framework and observability stack.
@@ -287,7 +314,6 @@ pactrun is intentionally small, dependency-light, and framework-agnostic. It is 
 
 Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`):
 
-- **CLI** — `pactrun init` / `validate` / `report`.
 - **More adapters** — LangGraph, CrewAI, Gemini, Pydantic AI (today: OpenAI, Anthropic, manual).
 - **pytest plugin** — `@pytest.mark.contracted`, session fixtures.
 - **Compliance export** — mapping contract specs to EU AI Act Annex IV / OWASP Agentic Top-10 evidence. (This produces *machine-readable inputs* to a technical file, not a complete compliance package.)
@@ -335,7 +361,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/agentpact
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 175 tests
+pytest        # 182 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.
