@@ -39,16 +39,16 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **199 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, a couple more framework adapters, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **205 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | Fluent `Contract` builder + YAML loader | EU AI Act / compliance document export |
-| Session-level runtime enforcement (sync + async) | CrewAI / Pydantic-AI adapters |
+| Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
 | 20 built-in predicates (cost, tools, output, timing, behavioral) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / retry / fallback | |
 | Drift detection (Page-Hinkley + EWMA) | |
-| OpenAI + Anthropic + Gemini + LangChain/LangGraph adapters | |
+| OpenAI + Anthropic + Gemini + LangChain/LangGraph + LiteLLM/CrewAI adapters | |
 | `@contract.enforce` decorator | |
 | CLI (`init` / `validate` / `show` / `predicates`) | |
 | pytest plugin (`@pytest.mark.contracted`) | |
@@ -122,7 +122,7 @@ with contract.session() as session:
 print(session.summary().total_cost_usd)
 ```
 
-`AnthropicAdapter` and `GeminiAdapter` work the same way — wrap the provider call in `with AnthropicAdapter():` or `with GeminiAdapter():`.
+`AnthropicAdapter` and `GeminiAdapter` work the same way — wrap the provider call in `with AnthropicAdapter():` or `with GeminiAdapter():`. `LiteLLMAdapter` patches `litellm.completion`, so it instruments **CrewAI** and anything else routed through LiteLLM: `with LiteLLMAdapter(): crew.kickoff()`.
 
 **3. As a decorator** — `@contract.enforce` opens a session around a function (emit events inside it via an adapter or `emit_*`):
 
@@ -336,7 +336,7 @@ pactrun is intentionally small, dependency-light, and framework-agnostic. It is 
 
 Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`):
 
-- **More adapters** — CrewAI, Pydantic AI (today: OpenAI, Anthropic, manual, Gemini, LangChain/LangGraph).
+- **More adapters** — Pydantic AI, and native CrewAI tool-event integration (today: OpenAI, Anthropic, Gemini, LangChain/LangGraph, LiteLLM/CrewAI, manual).
 - **Compliance export** — mapping contract specs to EU AI Act Annex IV / OWASP Agentic Top-10 evidence. (This produces *machine-readable inputs* to a technical file, not a complete compliance package.)
 - **Formal composition** — provable composition of contracts across multi-agent pipelines. This is a research direction, not a current feature.
 
@@ -406,7 +406,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/agentpact
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 199 tests
+pytest        # 205 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.

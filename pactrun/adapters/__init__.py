@@ -18,4 +18,7 @@ def __getattr__(name: str):
     if name == "GeminiAdapter":
         from pactrun.adapters.gemini import GeminiAdapter
         return GeminiAdapter
+    if name == "LiteLLMAdapter":
+        from pactrun.adapters.litellm import LiteLLMAdapter
+        return LiteLLMAdapter
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
