@@ -3,9 +3,9 @@
 </p>
 <p align="center"><strong>One line that refuses the call that would blow your AI agent's run</strong> — total cost, tool use, loops, drift — on the OpenAI/Anthropic SDKs or LangGraph/CrewAI.<br>Observability records what happened; pactrun refuses before it does.</p>
 
-[![Tests](https://github.com/beyhangl/agentpact/actions/workflows/test.yml/badge.svg)](https://github.com/beyhangl/agentpact/actions/workflows/test.yml)
-[![License](https://img.shields.io/github/license/beyhangl/agentpact)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.9+-blue)](https://github.com/beyhangl/agentpact)
+[![Tests](https://github.com/beyhangl/pactrun/actions/workflows/test.yml/badge.svg)](https://github.com/beyhangl/pactrun/actions/workflows/test.yml)
+[![License](https://img.shields.io/github/license/beyhangl/pactrun)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.9+-blue)](https://github.com/beyhangl/pactrun)
 [![Status](https://img.shields.io/badge/status-alpha-orange)](#status)
 
 ---
@@ -83,13 +83,13 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 The package is named **`pactrun`**. A PyPI release is planned (see Roadmap); until then, install from source:
 
 ```bash
-pip install "git+https://github.com/beyhangl/agentpact"
+pip install "git+https://github.com/beyhangl/pactrun"
 
 # with the OpenAI adapter extra:
-pip install "git+https://github.com/beyhangl/agentpact#egg=pactrun[openai]"
+pip install "git+https://github.com/beyhangl/pactrun#egg=pactrun[openai]"
 
 # local development:
-git clone https://github.com/beyhangl/agentpact && cd agentpact
+git clone https://github.com/beyhangl/pactrun && cd pactrun
 pip install -e ".[dev]"
 pytest
 ```
@@ -426,7 +426,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 ## Contributing
 
 ```bash
-git clone https://github.com/beyhangl/agentpact
+git clone https://github.com/beyhangl/pactrun
 cd agentpact
 pip install -e ".[dev]"
 pytest        # 214 tests
