@@ -18,3 +18,8 @@ node_modules/
 .DS_Store
 *.swp
 *.swo
+
+# Local-only strategy / planning docs (kept out of the public repo)
+AGENTPACT_DEEP_ANALYSIS.md
+PACTRUN_ADOPTION_PLAN.md
+LAUNCH_KIT.md
