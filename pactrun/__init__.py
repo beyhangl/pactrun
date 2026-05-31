@@ -22,13 +22,14 @@ from pactrun.predicates import (
     max_latency, session_timeout, max_turns,
     no_loops, max_retries, drift_bounds, no_repeated_output,
 )
+from pactrun.wrap import wrap
 
 __all__ = [
     "ClauseKind", "EventKind", "OnFail", "Severity",
     "ContractLoadError", "ViolationError",
     "EscalationError", "RetrySignal", "FallbackSignal",
     "Clause", "Event", "PredicateResult", "SessionState", "SessionSummary", "Violation",
-    "Contract", "Session", "get_active_session",
+    "Contract", "Session", "get_active_session", "wrap",
     "predicate", "get_predicate", "list_predicates",
     # Built-in predicates
     "cost_under", "cost_per_turn_under", "token_budget",

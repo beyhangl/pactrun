@@ -1,8 +1,9 @@
 <p align="center">
   <strong>pactrun</strong>
 </p>
-<p align="center">Behavioral contracts for AI agents.<br>Put hard limits on an agent's <em>whole run</em> — total cost, tool use, loops, and drift — and enforce them at runtime.</p>
+<p align="center"><strong>One line that refuses the call that would blow your AI agent's run</strong> — total cost, tool use, loops, drift — on the OpenAI/Anthropic SDKs or LangGraph/CrewAI.<br>Observability records what happened; pactrun refuses before it does.</p>
 
+[![Tests](https://github.com/beyhangl/agentpact/actions/workflows/test.yml/badge.svg)](https://github.com/beyhangl/agentpact/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/beyhangl/agentpact)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9+-blue)](https://github.com/beyhangl/agentpact)
 [![Status](https://img.shields.io/badge/status-alpha-orange)](#status)
@@ -12,6 +13,27 @@
 ## What is this?
 
 Guardrails check individual **messages**. pactrun checks an agent's behavior across an entire **session** — enforcing limits on accumulated cost, tool usage, call ordering, loops, and drift, and raising (or recording) a violation the moment a contract is broken.
+
+**The one-liner — wrap any OpenAI/Anthropic client and every call is checked _before_ it bills:**
+
+```python
+import openai, pactrun
+
+client = pactrun.wrap(
+    openai.OpenAI(),
+    max_cost="$0.50",                 # whole-run budget — refused BEFORE the call that would cross it
+    no_loops=True,                    # stop repeating tool loops
+    forbid_tools=["delete_account"],  # never let the model call this
+    max_drift=0.5,                    # flag cost-per-turn creep
+)
+
+client.chat.completions.create(model="gpt-4.1", messages=[{"role": "user", "content": "..."}])
+# raises ViolationError before billing if the worst-case cost would blow the run budget
+```
+
+> The cost check is a **worst-case bound** — you can't know completion tokens before a call, and reasoning models can exceed the estimate. It's an in-process circuit-breaker *between* calls, not a proxy to deploy. Demo: [`examples/three_in_one.py`](examples/three_in_one.py).
+
+For full control — any provider, or a non-SDK agent loop — build a `Contract` and drive it yourself:
 
 ```python
 from pactrun import Contract, cost_under, max_turns, no_loops, must_not_call
@@ -39,11 +61,12 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **205 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **214 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
-| Fluent `Contract` builder + YAML loader | EU AI Act / compliance document export |
+| One-line `pactrun.wrap()` pre-call cost / tool / loop / drift gate | EU AI Act / compliance document export |
+| Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
 | Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
 | 20 built-in predicates (cost, tools, output, timing, behavioral) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / retry / fallback | |
@@ -406,7 +429,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/agentpact
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 205 tests
+pytest        # 214 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.
