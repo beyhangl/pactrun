@@ -1,8 +1,8 @@
-"""Shared fixtures for agentpact tests."""
+"""Shared fixtures for pactrun tests."""
 
 import pytest
 
-from agentpact import Contract, Event, EventKind, PredicateResult, SessionState
+from pactrun import Contract, Event, EventKind, PredicateResult, SessionState
 
 
 @pytest.fixture

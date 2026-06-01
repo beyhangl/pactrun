@@ -1,7 +1,7 @@
 """Tests for tool predicates."""
 
 import pytest
-from agentpact import (
+from pactrun import (
     Contract, ViolationError,
     must_call, must_not_call, tool_order, tools_allowed, max_tool_calls,
 )

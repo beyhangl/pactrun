@@ -1,11 +1,11 @@
-"""Tests for agentpact Session runtime enforcement."""
+"""Tests for pactrun Session runtime enforcement."""
 
 import pytest
 
-from agentpact import (
+from pactrun import (
     Contract, Event, EventKind, OnFail, PredicateResult, Severity, ViolationError,
 )
-from agentpact.session import Session, get_active_session
+from pactrun.session import Session, get_active_session
 
 
 def _cost_check(max_usd):

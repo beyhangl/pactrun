@@ -1,4 +1,4 @@
-# agentpact — Implementation Plan
+# pactrun — Implementation Plan
 
 ## Timeline
 
@@ -27,7 +27,7 @@ Foundation + 20 built-in predicates. Users can:
 
 ### Files
 ```
-agentpact/
+pactrun/
 ├── __init__.py              # Public API exports
 ├── contract.py              # Contract class (fluent builder + YAML)
 ├── session.py               # Session runtime context manager
@@ -43,7 +43,7 @@ agentpact/
 
 ### Target API
 ```python
-from agentpact import Contract, cost_under, must_not_call
+from pactrun import Contract, cost_under, must_not_call
 
 contract = (
     Contract("support_agent")
@@ -121,7 +121,7 @@ EU AI Act Annex IV documentation generator. OWASP Agentic Top 10 coverage mappin
 
 ## Phase 7: CLI (Week 4)
 
-`agentpact init`, `agentpact validate`, `agentpact report`, `agentpact doctor`.
+`pactrun init`, `pactrun validate`, `pactrun report`, `pactrun doctor`.
 
 35 new tests (340 total).
 

@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agentpact"
+name = "pactrun"
 version = "0.1.0"
-description = "Agent Behavioral Contracts — Design-by-Contract for AI agents. Declare, enforce, detect drift, comply."
+description = "Behavioral contracts for AI agents — declare session-level cost, tool, and drift limits and enforce them at runtime."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
@@ -37,11 +37,15 @@ dependencies = [
 openai = ["openai>=1.0"]
 anthropic = ["anthropic>=0.30"]
 langchain = ["langchain-core>=0.2"]
+gemini = ["google-genai>=1.0"]
+litellm = ["litellm>=1.0"]
 evalcraft = ["evalcraft>=0.1.0"]
 all = [
     "openai>=1.0",
     "anthropic>=0.30",
     "langchain-core>=0.2",
+    "google-genai>=1.0",
+    "litellm>=1.0",
     "evalcraft>=0.1.0",
 ]
 dev = [
@@ -55,12 +59,15 @@ dev = [
 ]
 
 [project.scripts]
-agentpact = "agentpact.cli.main:cli"
+pactrun = "pactrun.cli.main:cli"
+
+[project.entry-points.pytest11]
+pactrun = "pactrun.pytest_plugin.plugin"
 
 [project.urls]
-Homepage = "https://github.com/beyhangl/agentpact"
-Repository = "https://github.com/beyhangl/agentpact"
-Issues = "https://github.com/beyhangl/agentpact/issues"
+Homepage = "https://github.com/beyhangl/pactrun"
+Repository = "https://github.com/beyhangl/pactrun"
+Issues = "https://github.com/beyhangl/pactrun/issues"
 
 [tool.ruff]
 target-version = "py39"
@@ -78,4 +85,4 @@ python_version = "3.9"
 strict = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["agentpact"]
+packages = ["pactrun"]

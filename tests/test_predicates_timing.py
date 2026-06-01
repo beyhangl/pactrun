@@ -1,7 +1,7 @@
 """Tests for timing predicates."""
 
 import pytest
-from agentpact import Contract, max_latency, session_timeout, max_turns
+from pactrun import Contract, max_latency, session_timeout, max_turns
 
 
 class TestMaxLatency:

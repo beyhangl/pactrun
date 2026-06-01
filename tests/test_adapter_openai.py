@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agentpact import Contract, cost_under, must_not_call
-from agentpact.adapters.openai import OpenAIAdapter
+from pactrun import Contract, cost_under, must_not_call
+from pactrun.adapters.openai import OpenAIAdapter
 
 
 class TestOpenAIAdapter:

@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agentpact import Contract, cost_under
-from agentpact.adapters.anthropic import AnthropicAdapter
+from pactrun import Contract, cost_under
+from pactrun.adapters.anthropic import AnthropicAdapter
 
 
 class TestAnthropicAdapter:
