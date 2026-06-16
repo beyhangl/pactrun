@@ -43,7 +43,9 @@ from pactrun.predicates import (
     drift_bounds,
     max_turns as max_turns_predicate,
     must_not_call,
+    no_destructive_args,
     no_loops as no_loops_predicate,
+    tool_args_match,
     tools_allowed as tools_allowed_predicate,
 )
 from pactrun.recovery.engine import apply_recovery
@@ -66,6 +68,8 @@ def wrap(
     max_drift: float | None = None,
     forbid_tools: list[str] | None = None,
     tools_allowed: list[str] | None = None,
+    forbid_args: bool | list[str] | None = None,
+    args_schema: dict | None = None,
     on_violation: str = "block",
     default_max_tokens: int = 4096,
     escalation_handler: Any = None,
@@ -92,6 +96,11 @@ def wrap(
         contract.forbid(must_not_call(tool))
     if tools_allowed:
         contract.require(tools_allowed_predicate(list(tools_allowed)))
+    if forbid_args:
+        extra = forbid_args if isinstance(forbid_args, list) else None
+        contract.forbid(no_destructive_args(extra=extra))
+    for tool_name, schema in (args_schema or {}).items():
+        contract.require(tool_args_match(tool_name, schema))
 
     return GuardedClient(
         client,
@@ -436,7 +445,7 @@ def _record_openai(session: Any, kwargs: dict, response: Any) -> None:
             fn = getattr(call, "function", None)
             name = getattr(fn, "name", None)
             if name:
-                tool_names.append((name, {}))
+                tool_names.append((name, _parse_tool_args(getattr(fn, "arguments", None))))
     except (AttributeError, IndexError, TypeError):
         pass
 
@@ -459,13 +468,13 @@ def _record_anthropic(session: Any, kwargs: dict, response: Any) -> None:
         completion_tokens = getattr(usage, "output_tokens", 0) or 0
 
     output = ""
-    tool_names: list[str] = []
+    tool_calls: list[tuple[str, dict]] = []
     try:
         for block in response.content or []:
             if hasattr(block, "text"):
                 output += block.text
             elif getattr(block, "name", None):
-                tool_names.append(block.name)
+                tool_calls.append((block.name, getattr(block, "input", None) or {}))
     except (AttributeError, TypeError):
         pass
 
@@ -474,8 +483,22 @@ def _record_anthropic(session: Any, kwargs: dict, response: Any) -> None:
         model=model, output=output, prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens, cost=cost,
     )
-    for name in tool_names:
-        session.emit_tool_call(name, args={})
+    for name, args in tool_calls:
+        session.emit_tool_call(name, args=args)
+
+
+def _parse_tool_args(raw: Any) -> dict:
+    import json
+
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+    return {}
 
 
 def _actual_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:

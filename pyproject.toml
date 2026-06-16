@@ -42,6 +42,8 @@ litellm = ["litellm>=1.0"]
 tiktoken = ["tiktoken>=0.9"]
 mcp = ["mcp>=1.10"]
 otel = ["opentelemetry-api>=1.27", "opentelemetry-sdk>=1.27", "opentelemetry-semantic-conventions>=0.48b0"]
+jsonschema = ["jsonschema>=4.0"]
+webhook = ["httpx>=0.24"]
 evalcraft = ["evalcraft>=0.1.0"]
 all = [
     "openai>=1.0",
@@ -53,6 +55,8 @@ all = [
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
     "opentelemetry-semantic-conventions>=0.48b0",
+    "jsonschema>=4.0",
+    "httpx>=0.24",
     "evalcraft>=0.1.0",
 ]
 dev = [
