@@ -61,15 +61,19 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **240 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **302 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | One-line `pactrun.wrap()` pre-call gate — real-tokenizer cost (tiktoken/litellm), **async + streaming** | EU AI Act / compliance document export |
 | Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
 | Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
-| 20 built-in predicates (cost, tools, output, timing, behavioral) | Formal multi-agent composition |
-| Recovery: log / warn / block / escalate / retry / fallback | |
+| 29 built-in predicates (cost, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**) | Formal multi-agent composition |
+| Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
+| **Argument-level tool guards** — JSON-Schema match, destructive-command block, path-sandbox | |
+| **Output integrity** — `valid_json` / `json_schema_valid` / `no_secrets` credential-leak scan | |
+| **Windowed rate limits** — rolling spend / call / per-tool caps (event-time) | |
+| **Built-in webhook escalation** — generic JSON or chat-webhook shape, throttled | |
 | Drift detection (Page-Hinkley + EWMA) | |
 | OpenAI + Anthropic + Gemini + LangChain/LangGraph + LiteLLM/CrewAI + **MCP** adapters | |
 | `@contract.enforce` decorator | |
@@ -249,6 +253,7 @@ Every clause has an `on_fail` action (set per-clause via `on_fail=...`, or for t
 | `warn` | record + emit a `UserWarning`, then continue |
 | `block` | record + raise `ViolationError`, halting the run immediately |
 | `escalate` | record + call an escalation handler (page a human / webhook), then raise `EscalationError` |
+| `approve` | record + ask an approval handler whether to proceed; continue if it allows, else raise `ViolationError` (fail-closed) |
 | `retry` | under `@contract.enforce`, re-run the wrapped call up to `max_retries` times |
 | `fallback` | under `@contract.enforce`, call a registered fallback function instead |
 
@@ -266,21 +271,32 @@ contract = (
     .fallback(safe_agent)
 )
 
-# Or escalate to a human/webhook and halt:
+# Or escalate to a human/webhook and halt. webhook_handler() ships ready to wire:
+from pactrun import webhook_handler
+
 contract = (
     Contract("supervised_agent")
     .require(cost_under(0.05), on_fail="escalate")
-    .on_escalate(lambda v: notify_oncall(v.message))
+    .on_escalate(webhook_handler("https://hooks.example.com/agents", mode="chat"))
+)
+
+# Or gate a violation on a human/policy decision instead of hard-blocking:
+from pactrun import cli_approver
+
+contract = (
+    Contract("reviewed_agent")
+    .require(cost_under(0.05), on_fail="approve")
+    .on_approve(cli_approver())          # returns truthy → proceed, falsy → raise
 )
 ```
 
-`retry` and `fallback` are control-flow actions handled by `@contract.enforce` (which owns the call); outside the decorator they surface as `RetrySignal` / `FallbackSignal` for you to handle. See [`examples/recovery.py`](examples/recovery.py).
+`webhook_handler(url, mode="generic"|"chat")` POSTs the violation (your own JSON endpoint or a chat-webhook shape) with per-clause throttling; `cli_approver()` prompts on the terminal, and any `(violation) -> bool` works as a headless policy gate (a missing or erroring approver fails closed). `retry` and `fallback` are control-flow actions handled by `@contract.enforce` (which owns the call); outside the decorator they surface as `RetrySignal` / `FallbackSignal` for you to handle. See [`examples/recovery.py`](examples/recovery.py).
 
 ---
 
 ## Built-in predicates
 
-All 20 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
+All 29 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
 
 | Group | Predicate | What it checks |
 |---|---|---|
@@ -292,14 +308,23 @@ All 20 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or refe
 | | `tool_order(expected, strict=False)` | tools called in a given order |
 | | `tools_allowed(whitelist)` | only whitelisted tools are called |
 | | `max_tool_calls(limit)` | total tool calls capped |
+| **Tool args** | `tool_args_match(tool, schema)` | a tool's call arguments validate against a JSON Schema |
+| | `no_destructive_args(tool=None, extra=None)` | tool args don't carry a destructive command (`rm -rf`, `DROP TABLE`, …) |
+| | `tool_path_within(root, tool=None, arg_keys=None)` | path-like args stay inside a sandbox root (no `..` escape) |
 | **Output** | `no_pii()` | no email / SSN / phone / card number in output |
 | | `output_contains(substring, case_sensitive=True)` | final output contains a string |
 | | `output_matches(pattern)` | final output matches a regex |
 | | `max_output_length(max_chars)` | output length capped |
 | | `output_must_not_contain(pattern)` | output does not match a forbidden regex |
+| | `valid_json()` | the final output parses as JSON |
+| | `json_schema_valid(schema)` | the final output is JSON that validates against a schema |
+| | `no_secrets(scan_tool_args=False)` | output (and optionally tool args) carries no API keys / tokens / private keys |
 | **Timing** | `max_latency(max_ms)` | no single event exceeds a latency |
 | | `session_timeout(max_ms)` | whole session completes within a time budget |
 | | `max_turns(n)` | session does not exceed N turns |
+| **Rate limit** | `spend_rate_under(max_usd, window_s)` | LLM spend within a rolling time window stays under a cap |
+| | `call_rate_under(max_calls, window_s)` | LLM-call count within a rolling window stays under a cap |
+| | `tool_rate_limit(tool, max_calls, per_seconds)` | one tool's invocation rate within a window stays under a cap |
 | **Behavioral** | `no_loops(window=5, threshold=0.8)` | recent tool calls aren't a repeating loop |
 | | `max_retries(n, tool=None)` | no more than N consecutive identical tool calls |
 | | `drift_bounds(cost_pct=None, tokens_pct=None)` | per-turn metrics stay within N% of the session average |
@@ -352,7 +377,7 @@ Installing pactrun adds a `pactrun` command:
 pactrun init --name support_agent      # scaffold contracts/support_agent.yaml
 pactrun validate contracts/            # validate one file or a whole directory
 pactrun show contracts/support_agent.yaml   # pretty-print a contract's clauses
-pactrun predicates                     # list the 20 built-in predicates
+pactrun predicates                     # list the 29 built-in predicates
 ```
 
 ```text
@@ -460,7 +485,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/pactrun
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 240 tests
+pytest        # 302 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.
