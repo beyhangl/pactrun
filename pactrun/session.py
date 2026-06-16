@@ -153,6 +153,13 @@ class Session:
             if not result.passed:
                 self._record_violation(clause, dummy_event, result)
 
+        # Notify observers that the run is over (e.g. flush a buffered digest,
+        # emit session-scoped telemetry). Optional hook — no-op when absent.
+        for observer in self._observers:
+            end = getattr(observer, "on_session_end", None)
+            if end is not None:
+                end(self._state)
+
         self._active = False
         if self._token is not None:
             _active_session.reset(self._token)

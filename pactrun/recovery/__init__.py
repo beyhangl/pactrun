@@ -8,6 +8,7 @@ from pactrun.recovery.engine import (
 )
 from pactrun.recovery.webhook import webhook_handler
 from pactrun.recovery.approval import cli_approver, auto_approver
+from pactrun.recovery.digest import digest, Digest
 
 __all__ = [
     "apply_recovery",
@@ -17,4 +18,6 @@ __all__ = [
     "webhook_handler",
     "cli_approver",
     "auto_approver",
+    "digest",
+    "Digest",
 ]

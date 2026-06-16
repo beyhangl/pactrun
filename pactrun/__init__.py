@@ -15,7 +15,7 @@ from pactrun.contract import Contract
 from pactrun.session import Session, get_active_session
 from pactrun.recovery import (
     EscalationError, RetrySignal, FallbackSignal,
-    webhook_handler, cli_approver, auto_approver,
+    webhook_handler, cli_approver, auto_approver, digest,
 )
 from pactrun.predicates.base import predicate, get_predicate, list_predicates
 from pactrun.predicates import (
@@ -37,7 +37,7 @@ __all__ = [
     "ClauseKind", "EventKind", "OnFail", "Severity",
     "ContractLoadError", "ViolationError",
     "EscalationError", "RetrySignal", "FallbackSignal",
-    "webhook_handler", "cli_approver", "auto_approver",
+    "webhook_handler", "cli_approver", "auto_approver", "digest",
     "Clause", "Event", "PredicateResult", "SessionState", "SessionSummary", "Violation",
     "Contract", "Session", "get_active_session", "wrap",
     "predicate", "get_predicate", "list_predicates",
