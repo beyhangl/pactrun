@@ -455,6 +455,82 @@ def tool_host_within(
     return check
 
 
+@predicate("consent_token_required")
+def consent_token_required(
+    tools,
+    *,
+    token_key: str = "user_consent",
+    bind_args: list[str] | None = None,
+    max_age_s: float | None = 300,
+    secret=None,
+):
+    """Gate side-effecting tools on a fresh, action-bound consent token.
+
+    Raises the bar from "the model self-authorized" to "the host carried a
+    consent token scoped to THIS exact action into the turn". For each call to
+    a tool in ``tools``, a token is read from ``event.metadata[token_key]``
+    (per-turn), falling back to ``state.metadata[token_key]``. The token is a
+    dict ``{"action", "sig", "issued_at"}`` (use :func:`mint_consent_token` to
+    produce one). The call passes only if:
+
+    - the token is present;
+    - its ``sig`` matches a signature recomputed from the live ``tool_name`` and
+      the values of ``bind_args`` — so a token issued for a *different* action
+      or different arguments is rejected (no replay);
+    - it is fresh: ``time.time() - issued_at <= max_age_s`` (skipped when
+      ``max_age_s is None``);
+    - if ``secret`` is given, the signature is an HMAC verified with
+      ``hmac.compare_digest`` (constant-time).
+
+    Pair with ``on_fail="approve"`` to route a tokenless call to a human, or
+    ``on_fail="block"`` to refuse outright. Honest bound: this validates that a
+    matching, unexpired, action-bound token was presented; it cannot attest the
+    token's origin beyond the shared-secret HMAC the host signs with.
+    """
+    tools_set = {tools} if isinstance(tools, str) else set(tools)
+
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        if event.kind != EventKind.TOOL_CALL or event.tool_name not in tools_set:
+            return PredicateResult(passed=True)
+        token = (event.metadata or {}).get(token_key)
+        if token is None:
+            token = (state.metadata or {}).get(token_key)
+        if not isinstance(token, dict):
+            return PredicateResult(
+                passed=False,
+                expected=f"consent token for '{event.tool_name}'",
+                actual="no token",
+                message=f"Tool '{event.tool_name}' requires a consent token (none presented)",
+            )
+
+        import hmac
+
+        expected = _action_sig(event.tool_name, event.tool_args, bind_args, secret)
+        if not hmac.compare_digest(str(token.get("sig", "")), expected):
+            return PredicateResult(
+                passed=False,
+                expected="consent token bound to this action",
+                actual="signature mismatch",
+                message=f"Consent token does not match this '{event.tool_name}' call (wrong action/args or bad secret)",
+            )
+
+        if max_age_s is not None:
+            import time
+
+            issued = token.get("issued_at")
+            if not isinstance(issued, (int, float)) or (time.time() - issued) > max_age_s:
+                return PredicateResult(
+                    passed=False,
+                    expected=f"token issued within {max_age_s:.0f}s",
+                    actual=f"issued_at={issued!r}",
+                    message=f"Consent token for '{event.tool_name}' is expired or undated",
+                )
+        return PredicateResult(passed=True)
+
+    check.predicate_name = "consent_token_required"  # type: ignore[attr-defined]
+    return check
+
+
 def _args_blob(tool_args) -> str:
     import json
 
@@ -583,3 +659,49 @@ def _is_private_host(host: str) -> bool:
     if ip is None:
         return False
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+
+
+def _canonical_action(action: str, tool_args, bind_args) -> str:
+    """Stable canonical string of (action, bound-arg values) for signing."""
+    import json
+
+    payload = {"action": action}
+    if bind_args:
+        payload["args"] = {k: _resolve_path(tool_args or {}, k)[1] for k in bind_args}
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+def _action_sig(action: str, tool_args, bind_args, secret) -> str:
+    """Signature binding a consent token to an action: HMAC if secret, else sha256."""
+    import hashlib
+    import hmac
+
+    msg = _canonical_action(action, tool_args, bind_args).encode("utf-8")
+    if secret:
+        key = secret if isinstance(secret, (bytes, bytearray)) else str(secret).encode("utf-8")
+        return hmac.new(key, msg, hashlib.sha256).hexdigest()
+    return hashlib.sha256(msg).hexdigest()
+
+
+def mint_consent_token(
+    action: str,
+    *,
+    args: dict | None = None,
+    bind_args: list[str] | None = None,
+    secret=None,
+    issued_at: float | None = None,
+) -> dict:
+    """Produce a consent token for :func:`consent_token_required` (host-side).
+
+    Sign the exact ``action`` (tool name) and, if ``bind_args`` is given, the
+    values of those argument paths in ``args`` — so the token only validates a
+    call carrying the same values. ``issued_at`` defaults to ``time.time()``.
+    """
+    import time
+
+    sig = _action_sig(action, args or {}, bind_args, secret)
+    return {
+        "action": action,
+        "sig": sig,
+        "issued_at": time.time() if issued_at is None else issued_at,
+    }
