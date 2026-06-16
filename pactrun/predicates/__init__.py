@@ -7,7 +7,7 @@ from pactrun.predicates.cost import cost_under, cost_per_turn_under, token_budge
 from pactrun.predicates.tools import (
     must_call, must_not_call, tool_order, tools_allowed, max_tool_calls,
     tool_args_match, no_destructive_args, tool_path_within,
-    tool_arg_value_guard, required_disclosure,
+    tool_arg_value_guard, required_disclosure, tool_host_within,
 )
 from pactrun.predicates.output import (
     no_pii, output_contains, output_matches, max_output_length, output_must_not_contain,
@@ -24,7 +24,7 @@ __all__ = [
     # Tools
     "must_call", "must_not_call", "tool_order", "tools_allowed", "max_tool_calls",
     "tool_args_match", "no_destructive_args", "tool_path_within",
-    "tool_arg_value_guard", "required_disclosure",
+    "tool_arg_value_guard", "required_disclosure", "tool_host_within",
     # Output
     "no_pii", "output_contains", "output_matches", "max_output_length", "output_must_not_contain",
     "valid_json", "json_schema_valid", "no_secrets",

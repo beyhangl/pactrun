@@ -385,6 +385,76 @@ def required_disclosure(
     return check
 
 
+@predicate("tool_host_within")
+def tool_host_within(
+    allow: list[str] | None = None,
+    deny: list[str] | None = None,
+    block_private: bool = False,
+    tool: str | None = None,
+    arg: str | None = None,
+    arg_keys: list[str] | None = None,
+):
+    """Network-egress guard: URL/host-shaped tool args must target allowed hosts.
+
+    The egress sibling of :func:`tool_path_within`. For each URL/host-looking
+    string argument, the host is extracted and checked:
+
+    - ``deny`` wins — host matching any deny pattern fails;
+    - ``allow`` is implicit-deny-by-default — if ``allow`` is given and the host
+      matches none of it, it fails;
+    - ``block_private`` — a private / loopback / link-local IP **literal** or
+      ``localhost`` fails, including the cloud-metadata address
+      ``169.254.169.254`` (a common SSRF target).
+
+    Patterns are host globs (``fnmatch``, lowercased: ``"*.corp.com"``) or
+    IP/CIDR (``"10.0.0.0/8"``). **No DNS resolution** is performed — this is
+    deterministic and TOCTOU-free, but blocks literal hosts only; pair with
+    network-level egress control for full assurance. Pass at least one of
+    ``allow`` / ``deny`` / ``block_private``. By default every string arg that
+    looks like a URL/host is checked; narrow with ``arg`` or ``arg_keys``.
+    """
+    if not allow and not deny and not block_private:
+        raise ValueError("tool_host_within: pass allow, deny, and/or block_private")
+    keys = set(arg_keys) if arg_keys else ({arg} if arg else None)
+
+    def _evaluate(host: str):
+        if deny and _host_matches(host, deny):
+            return f"host '{host}' matches deny list"
+        if allow is not None and not _host_matches(host, allow):
+            return f"host '{host}' is not in the allow list"
+        if block_private and _is_private_host(host):
+            return f"host '{host}' is a private/loopback/link-local address"
+        return None
+
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        if event.kind != EventKind.TOOL_CALL:
+            return PredicateResult(passed=True)
+        if tool is not None and event.tool_name != tool:
+            return PredicateResult(passed=True)
+        for key, value in (event.tool_args or {}).items():
+            if keys is not None and key not in keys:
+                continue
+            if not isinstance(value, str):
+                continue
+            if keys is None and not _url_like(value):
+                continue
+            host = _extract_host(value)
+            if host is None:
+                continue
+            reason = _evaluate(host)
+            if reason:
+                return PredicateResult(
+                    passed=False,
+                    expected="tool reaches only allowed hosts",
+                    actual=value,
+                    message=f"Tool '{event.tool_name}' arg '{key}': {reason}",
+                )
+        return PredicateResult(passed=True)
+
+    check.predicate_name = "tool_host_within"  # type: ignore[attr-defined]
+    return check
+
+
 def _args_blob(tool_args) -> str:
     import json
 
@@ -443,3 +513,73 @@ def _value_in(value: str, entries: set, match: str) -> bool:
 
         return any(re.search(e, value) for e in entries)
     return False
+
+
+def _as_ip(host: str):
+    import ipaddress
+
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _extract_host(value: str):
+    """Pull the host out of a URL or bare host[:port][/path]; lowercased, no brackets."""
+    from urllib.parse import urlsplit
+
+    v = value.strip()
+    if not v:
+        return None
+    try:
+        netloc_form = v if "://" in v else "//" + v
+        host = urlsplit(netloc_form).hostname
+    except ValueError:
+        return None
+    return host.lower() if host else None
+
+
+def _url_like(value: str) -> bool:
+    """Heuristic: is this string worth treating as a URL/host for egress checks?"""
+    v = value.strip()
+    if not v or any(ch.isspace() for ch in v):
+        return False
+    if "://" in v:
+        return True
+    head = v.split("/")[0]
+    hostpart = head.rsplit(":", 1)[0].strip("[]")
+    if hostpart == "localhost":
+        return True
+    if _as_ip(hostpart) is not None:
+        return True
+    return ("." in hostpart) and all(ch.isalnum() or ch in ".-" for ch in hostpart)
+
+
+def _host_matches(host: str, patterns: list[str]) -> bool:
+    """True if host matches any glob host pattern or IP/CIDR in ``patterns``."""
+    import ipaddress
+    from fnmatch import fnmatch
+
+    host_ip = _as_ip(host)
+    for p in patterns:
+        pl = p.lower()
+        if host_ip is not None:
+            try:
+                net = ipaddress.ip_network(p, strict=False)
+            except ValueError:
+                net = None
+            if net is not None and host_ip.version == net.version and host_ip in net:
+                return True
+        if fnmatch(host, pl):
+            return True
+    return False
+
+
+def _is_private_host(host: str) -> bool:
+    """True for localhost or a private/loopback/link-local/reserved IP literal."""
+    if host == "localhost":
+        return True
+    ip = _as_ip(host)
+    if ip is None:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
