@@ -8,7 +8,10 @@ from pactrun.predicates.tools import (
     must_call, must_not_call, tool_order, tools_allowed, max_tool_calls,
     tool_args_match, no_destructive_args, tool_path_within,
 )
-from pactrun.predicates.output import no_pii, output_contains, output_matches, max_output_length, output_must_not_contain
+from pactrun.predicates.output import (
+    no_pii, output_contains, output_matches, max_output_length, output_must_not_contain,
+    valid_json, json_schema_valid, no_secrets,
+)
 from pactrun.predicates.timing import max_latency, session_timeout, max_turns
 from pactrun.predicates.behavioral import no_loops, max_retries, drift_bounds, no_repeated_output
 
@@ -21,6 +24,7 @@ __all__ = [
     "tool_args_match", "no_destructive_args", "tool_path_within",
     # Output
     "no_pii", "output_contains", "output_matches", "max_output_length", "output_must_not_contain",
+    "valid_json", "json_schema_valid", "no_secrets",
     # Timing
     "max_latency", "session_timeout", "max_turns",
     # Behavioral

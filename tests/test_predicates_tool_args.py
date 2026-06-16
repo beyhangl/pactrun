@@ -14,6 +14,17 @@ from pactrun import (
 )
 
 
+def _have(module: str) -> bool:
+    try:
+        __import__(module)
+        return True
+    except ImportError:
+        return False
+
+
+HAS_JSONSCHEMA = _have("jsonschema")
+
+
 class TestNoDestructiveArgs:
     def test_blocks_rm_rf(self):
         c = Contract("t").forbid(no_destructive_args())
@@ -46,6 +57,7 @@ class TestNoDestructiveArgs:
         assert s.is_compliant
 
 
+@pytest.mark.skipif(not HAS_JSONSCHEMA, reason="needs the jsonschema extra")
 class TestToolArgsMatch:
     SCHEMA = {
         "type": "object",

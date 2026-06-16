@@ -20,6 +20,7 @@ from pactrun.predicates import (
     must_call, must_not_call, tool_order, tools_allowed, max_tool_calls,
     tool_args_match, no_destructive_args, tool_path_within,
     no_pii, output_contains, output_matches, max_output_length, output_must_not_contain,
+    valid_json, json_schema_valid, no_secrets,
     max_latency, session_timeout, max_turns,
     no_loops, max_retries, drift_bounds, no_repeated_output,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "must_call", "must_not_call", "tool_order", "tools_allowed", "max_tool_calls",
     "tool_args_match", "no_destructive_args", "tool_path_within",
     "no_pii", "output_contains", "output_matches", "max_output_length", "output_must_not_contain",
+    "valid_json", "json_schema_valid", "no_secrets",
     "max_latency", "session_timeout", "max_turns",
     "no_loops", "max_retries", "drift_bounds", "no_repeated_output",
 ]

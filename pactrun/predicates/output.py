@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from pactrun.core.enums import EventKind
@@ -111,4 +112,103 @@ def output_must_not_contain(pattern: str):
             )
         return PredicateResult(passed=True)
     check.predicate_name = "output_must_not_contain"  # type: ignore[attr-defined]
+    return check
+
+
+@predicate("valid_json")
+def valid_json():
+    """The final output must parse as JSON (checked at session end)."""
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        if not state.output_history:
+            return PredicateResult(passed=False, message="No output to check")
+        try:
+            json.loads(state.output_history[-1])
+        except (ValueError, TypeError) as exc:
+            return PredicateResult(
+                passed=False, expected="valid JSON output",
+                actual=str(exc), message=f"Output is not valid JSON: {exc}",
+            )
+        return PredicateResult(passed=True)
+    check.predicate_name = "valid_json"  # type: ignore[attr-defined]
+    check._check_on = "session_end"  # type: ignore[attr-defined]
+    return check
+
+
+@predicate("json_schema_valid")
+def json_schema_valid(schema: dict):
+    """Final output must parse as JSON and validate against a JSON Schema.
+
+    Requires the ``jsonschema`` extra: ``pip install 'pactrun[jsonschema]'``.
+    """
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        if not state.output_history:
+            return PredicateResult(passed=False, message="No output to check")
+        try:
+            from jsonschema import Draft202012Validator
+        except ImportError as exc:
+            raise ImportError(
+                "json_schema_valid requires the 'jsonschema' package. "
+                "Install it with: pip install 'pactrun[jsonschema]'"
+            ) from exc
+        try:
+            data = json.loads(state.output_history[-1])
+        except (ValueError, TypeError) as exc:
+            return PredicateResult(
+                passed=False, expected="JSON matching schema",
+                actual=f"not JSON: {exc}", message=f"Output is not valid JSON: {exc}",
+            )
+        errors = sorted(Draft202012Validator(schema).iter_errors(data), key=lambda e: list(e.path))
+        if errors:
+            return PredicateResult(
+                passed=False, expected="JSON matching schema",
+                actual=errors[0].message,
+                message=f"Output JSON does not match schema: {errors[0].message}",
+            )
+        return PredicateResult(passed=True)
+    check.predicate_name = "json_schema_valid"  # type: ignore[attr-defined]
+    check._check_on = "session_end"  # type: ignore[attr-defined]
+    return check
+
+
+# Best-effort credential patterns (regex, label). NON-EXHAUSTIVE starter set —
+# regex detection is best-effort, never a guarantee.
+_SECRET_PATTERNS: list[tuple[str, str]] = [
+    (r"AKIA[0-9A-Z]{16}", "AWS access key id"),
+    (r"ghp_[A-Za-z0-9]{36}", "GitHub token"),
+    (r"sk-[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}", "provider API key"),
+    (r"AIza[0-9A-Za-z_\-]{35}", "Google API key"),
+    (r"xox[bpas]-[0-9A-Za-z\-]{10,}", "Slack token"),
+    (r"sk_live_[0-9A-Za-z]{20,}", "payment live key"),
+    (r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+", "JWT"),
+    (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "private key"),
+]
+
+
+@predicate("no_secrets")
+def no_secrets(scan_tool_args: bool = False):
+    """Output (and optionally tool args) must not contain leaked credentials.
+
+    Best-effort regex scan for API keys / tokens / private keys; the violation
+    message redacts the matched value so it does not re-leak the secret. The
+    pattern bank is non-exhaustive and not a guarantee.
+    """
+    patterns = [(re.compile(p), label) for p, label in _SECRET_PATTERNS]
+
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        blobs = [str(event.output or "")]
+        if scan_tool_args and event.tool_args:
+            blobs.append(json.dumps(event.tool_args, default=str))
+        for blob in blobs:
+            if not blob:
+                continue
+            for rx, label in patterns:
+                match = rx.search(blob)
+                if match:
+                    return PredicateResult(
+                        passed=False, expected="no leaked credentials",
+                        actual=f"Found {label}: {match.group()[:8]}...redacted",
+                        message=f"Output contains a leaked credential ({label})",
+                    )
+        return PredicateResult(passed=True)
+    check.predicate_name = "no_secrets"  # type: ignore[attr-defined]
     return check
