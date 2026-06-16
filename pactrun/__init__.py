@@ -23,6 +23,7 @@ from pactrun.predicates import (
     valid_json, json_schema_valid, no_secrets,
     max_latency, session_timeout, max_turns,
     no_loops, max_retries, drift_bounds, no_repeated_output,
+    spend_rate_under, call_rate_under, tool_rate_limit,
 )
 from pactrun.wrap import wrap
 
@@ -41,4 +42,5 @@ __all__ = [
     "valid_json", "json_schema_valid", "no_secrets",
     "max_latency", "session_timeout", "max_turns",
     "no_loops", "max_retries", "drift_bounds", "no_repeated_output",
+    "spend_rate_under", "call_rate_under", "tool_rate_limit",
 ]

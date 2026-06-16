@@ -14,6 +14,7 @@ from pactrun.predicates.output import (
 )
 from pactrun.predicates.timing import max_latency, session_timeout, max_turns
 from pactrun.predicates.behavioral import no_loops, max_retries, drift_bounds, no_repeated_output
+from pactrun.predicates.ratelimit import spend_rate_under, call_rate_under, tool_rate_limit
 
 __all__ = [
     "predicate", "get_predicate", "list_predicates",
@@ -29,4 +30,6 @@ __all__ = [
     "max_latency", "session_timeout", "max_turns",
     # Behavioral
     "no_loops", "max_retries", "drift_bounds", "no_repeated_output",
+    # Rate limits
+    "spend_rate_under", "call_rate_under", "tool_rate_limit",
 ]

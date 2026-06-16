@@ -45,7 +45,9 @@ from pactrun.predicates import (
     must_not_call,
     no_destructive_args,
     no_loops as no_loops_predicate,
+    spend_rate_under,
     tool_args_match,
+    tool_rate_limit,
     tools_allowed as tools_allowed_predicate,
 )
 from pactrun.recovery.engine import apply_recovery
@@ -70,6 +72,8 @@ def wrap(
     tools_allowed: list[str] | None = None,
     forbid_args: bool | list[str] | None = None,
     args_schema: dict | None = None,
+    max_cost_per_min: float | None = None,
+    tool_rate_limits: dict | None = None,
     on_violation: str = "block",
     default_max_tokens: int = 4096,
     escalation_handler: Any = None,
@@ -101,6 +105,10 @@ def wrap(
         contract.forbid(no_destructive_args(extra=extra))
     for tool_name, schema in (args_schema or {}).items():
         contract.require(tool_args_match(tool_name, schema))
+    if max_cost_per_min is not None:
+        contract.require(spend_rate_under(max_cost_per_min, 60))
+    for tool_name, (n_calls, per_seconds) in (tool_rate_limits or {}).items():
+        contract.require(tool_rate_limit(tool_name, n_calls, per_seconds))
 
     return GuardedClient(
         client,
