@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pactrun.core.enums import EventKind
 from pactrun.core.models import Event, PredicateResult, SessionState
 from pactrun.predicates.base import predicate
 
@@ -117,4 +118,49 @@ def no_repeated_output(window: int = 3):
             )
         return PredicateResult(passed=True)
     check.predicate_name = "no_repeated_output"  # type: ignore[attr-defined]
+    return check
+
+
+def _is_tool_error(e: Event) -> bool:
+    """Classify a tool-call event as failed across the shapes adapters populate."""
+    if e.error is not None:
+        return True
+    meta = e.metadata or {}
+    if meta.get("is_error") or meta.get("isError"):  # MCP-style result flag
+        return True
+    if isinstance(e.tool_result, BaseException):
+        return True
+    return False
+
+
+@predicate("tool_error_rate_under")
+def tool_error_rate_under(max_rate: float = 0.3, window: int = 10, min_calls: int = 3):
+    """Rolling tool-failure fraction must stay under a ceiling.
+
+    Looks at the last ``window`` tool calls; if at least ``min_calls`` have
+    occurred, fails when the failed fraction exceeds ``max_rate`` (a degraded-
+    grounding signal: the agent keeps calling tools that error). Below
+    ``min_calls`` it passes (warm-up). A call is "failed" when ``Event.error``
+    is set, its ``metadata`` carries an ``is_error`` / ``isError`` flag (MCP
+    shape), or its ``tool_result`` is an exception.
+
+    Note: fires only where the adapter populates an error signal (the manual and
+    MCP adapters today). It degrades safely — an unflagged call counts as a
+    success — so it never false-positives on adapters that don't yet map tool
+    errors into ``Event.error``.
+    """
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        tool_events = [e for e in state.events if e.kind == EventKind.TOOL_CALL]
+        recent = tool_events[-window:]
+        if len(recent) < min_calls:
+            return PredicateResult(passed=True)
+        errors = sum(1 for e in recent if _is_tool_error(e))
+        rate = errors / len(recent)
+        return PredicateResult(
+            passed=rate <= max_rate,
+            expected=f"tool error rate <= {max_rate:.0%}",
+            actual=f"{rate:.0%} ({errors}/{len(recent)})",
+            message=f"Tool error rate {rate:.0%} ({errors}/{len(recent)}) exceeds {max_rate:.0%}",
+        )
+    check.predicate_name = "tool_error_rate_under"  # type: ignore[attr-defined]
     return check
