@@ -217,6 +217,174 @@ def tool_path_within(root: str, tool: str | None = None, arg_keys: list[str] | N
     return check
 
 
+@predicate("tool_arg_value_guard")
+def tool_arg_value_guard(
+    tool: str | None,
+    field: str,
+    deny=None,
+    allow=None,
+    match: str = "exact",
+    normalize=None,
+    dedupe_within_session: bool = False,
+):
+    """Allow/deny a specific tool-argument field by value, with optional dedupe.
+
+    Reads the value at ``field`` (a dotted path: ``"recipient.email"``,
+    ``"items.0.name"``) of the named tool's arguments and enforces:
+
+    - ``deny`` — fail when the value matches any denylist entry (pass when the
+      field is absent);
+    - ``allow`` — fail when the value is NOT in the allowlist (**fail-closed**
+      when the field is absent).
+
+    Pass ``deny`` OR ``allow`` (not both), and/or ``dedupe_within_session``.
+    ``match`` chooses comparison: ``"exact"`` | ``"ci"`` (case-insensitive) |
+    ``"glob"`` (fnmatch) | ``"regex"`` (``re.search``). ``deny`` / ``allow`` may
+    be a list/set/tuple **or a zero-arg callable** returning one — the callable
+    is re-evaluated every event, so a suppression list loaded from a mutating
+    file is honored live. ``normalize`` (``Callable[[str], str]``) is applied to
+    both the live value and each list entry before comparison.
+
+    With ``dedupe_within_session=True`` the same normalized value may be
+    targeted at most once per session: a later tool call carrying the same key
+    fails. Dedupe scans recorded events only (no closure-mutable state), so it
+    is replay-deterministic.
+    """
+    if deny is not None and allow is not None:
+        raise ValueError("tool_arg_value_guard: pass deny OR allow, not both")
+    if deny is None and allow is None and not dedupe_within_session:
+        raise ValueError(
+            "tool_arg_value_guard: pass deny, allow, or dedupe_within_session=True"
+        )
+    if match not in ("exact", "ci", "glob", "regex"):
+        raise ValueError(f"tool_arg_value_guard: unknown match {match!r}")
+
+    def _norm(v) -> str:
+        s = v if isinstance(v, str) else str(v)
+        return normalize(s) if normalize else s
+
+    def _resolve_set(spec):
+        raw = spec() if callable(spec) else spec
+        return {_norm(x) for x in (raw or [])}
+
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        if event.kind != EventKind.TOOL_CALL:
+            return PredicateResult(passed=True)
+        if tool is not None and event.tool_name != tool:
+            return PredicateResult(passed=True)
+
+        found, value = _resolve_path(event.tool_args or {}, field)
+        norm_value = _norm(value) if found else None
+
+        if allow is not None:
+            if not found:
+                return PredicateResult(
+                    passed=False,
+                    expected=f"'{field}' present and in allowlist",
+                    actual="field absent",
+                    message=f"Tool '{event.tool_name}' arg '{field}' missing (allowlist is fail-closed)",
+                )
+            if not _value_in(norm_value, _resolve_set(allow), match):
+                return PredicateResult(
+                    passed=False,
+                    expected=f"'{field}' in allowlist",
+                    actual=str(value),
+                    message=f"Tool '{event.tool_name}' arg '{field}'={value!r} is not in the allowlist",
+                )
+
+        if deny is not None and found:
+            if _value_in(norm_value, _resolve_set(deny), match):
+                return PredicateResult(
+                    passed=False,
+                    expected=f"'{field}' not in denylist",
+                    actual=str(value),
+                    message=f"Tool '{event.tool_name}' arg '{field}'={value!r} is on the denylist",
+                )
+
+        if dedupe_within_session and found:
+            for e in state.events:
+                if e.id == event.id or e.kind != EventKind.TOOL_CALL:
+                    continue
+                if tool is not None and e.tool_name != tool:
+                    continue
+                pf, pv = _resolve_path(e.tool_args or {}, field)
+                if pf and _norm(pv) == norm_value:
+                    return PredicateResult(
+                        passed=False,
+                        expected=f"'{field}' targeted at most once per session",
+                        actual=str(value),
+                        message=f"Tool '{event.tool_name}' already targeted '{field}'={value!r} this session",
+                    )
+
+        return PredicateResult(passed=True)
+
+    check.predicate_name = "tool_arg_value_guard"  # type: ignore[attr-defined]
+    return check
+
+
+@predicate("required_disclosure")
+def required_disclosure(
+    tool: str | None,
+    arg: str,
+    must_contain,
+    match: str = "all",
+    pattern: bool = False,
+    case_sensitive: bool = False,
+):
+    """A tool-call argument must contain required disclosure phrase(s).
+
+    **Fail-closed**: if the named tool's ``arg`` is missing, ``None``, or
+    non-string, the check fails (the disclosure cannot be present). Use it to
+    require, e.g., that an outreach message states it is automated and on whose
+    behalf, *before* the send tool fires.
+
+    ``must_contain`` is a phrase or list of phrases. ``match="all"`` requires
+    every phrase; ``match="any"`` requires at least one. With ``pattern=True``
+    each phrase is a regular expression (``re.search``). Matching is
+    case-insensitive unless ``case_sensitive=True``.
+    """
+    needles = [must_contain] if isinstance(must_contain, str) else list(must_contain)
+    if match not in ("all", "any"):
+        raise ValueError(f"required_disclosure: match must be 'all' or 'any', got {match!r}")
+    reducer = all if match == "all" else any
+
+    def _present(text: str, needle: str) -> bool:
+        if pattern:
+            import re
+
+            flags = 0 if case_sensitive else re.IGNORECASE
+            return re.search(needle, text, flags) is not None
+        if case_sensitive:
+            return needle in text
+        return needle.lower() in text.lower()
+
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        if event.kind != EventKind.TOOL_CALL:
+            return PredicateResult(passed=True)
+        if tool is not None and event.tool_name != tool:
+            return PredicateResult(passed=True)
+        val = (event.tool_args or {}).get(arg)
+        if not isinstance(val, str):
+            return PredicateResult(
+                passed=False,
+                expected=f"'{arg}' contains required disclosure",
+                actual=f"{arg}={val!r}",
+                message=f"Tool '{event.tool_name}' arg '{arg}' is missing or not text — disclosure absent",
+            )
+        if not reducer(_present(val, n) for n in needles):
+            missing = [n for n in needles if not _present(val, n)]
+            return PredicateResult(
+                passed=False,
+                expected=f"{match} of {needles}",
+                actual=val,
+                message=f"Tool '{event.tool_name}' arg '{arg}' missing required disclosure: {missing}",
+            )
+        return PredicateResult(passed=True)
+
+    check.predicate_name = "required_disclosure"  # type: ignore[attr-defined]
+    return check
+
+
 def _args_blob(tool_args) -> str:
     import json
 
@@ -230,3 +398,48 @@ def _args_blob(tool_args) -> str:
 
 def _looks_like_path(value: str) -> bool:
     return ("/" in value) or ("\\" in value) or value.startswith("~")
+
+
+def _resolve_path(obj, path: str):
+    """Walk a dotted path (dict keys + int list indices). Returns (found, value).
+
+    ``"recipient.email"`` descends dict keys; numeric segments index lists or
+    tuples (negative indices allowed). Returns ``(False, None)`` if any segment
+    is absent or the container type doesn't match.
+    """
+    cur = obj
+    for part in path.split("."):
+        if isinstance(cur, dict):
+            if part not in cur:
+                return False, None
+            cur = cur[part]
+        elif isinstance(cur, (list, tuple)):
+            try:
+                idx = int(part)
+            except ValueError:
+                return False, None
+            if -len(cur) <= idx < len(cur):
+                cur = cur[idx]
+            else:
+                return False, None
+        else:
+            return False, None
+    return True, cur
+
+
+def _value_in(value: str, entries: set, match: str) -> bool:
+    """True if ``value`` matches any of ``entries`` under the given match mode."""
+    if match == "exact":
+        return value in entries
+    if match == "ci":
+        v = value.casefold()
+        return any(v == e.casefold() for e in entries)
+    if match == "glob":
+        from fnmatch import fnmatch
+
+        return any(fnmatch(value, e) for e in entries)
+    if match == "regex":
+        import re
+
+        return any(re.search(e, value) for e in entries)
+    return False
