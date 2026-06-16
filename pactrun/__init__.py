@@ -30,6 +30,7 @@ from pactrun.predicates import (
     no_loops, max_retries, drift_bounds, no_repeated_output, tool_error_rate_under,
     spend_rate_under, call_rate_under, tool_rate_limit,
     per_key_rate_limit, tool_quota_per_period,
+    flow_progression,
 )
 from pactrun.wrap import wrap
 
@@ -53,4 +54,5 @@ __all__ = [
     "no_loops", "max_retries", "drift_bounds", "no_repeated_output", "tool_error_rate_under",
     "spend_rate_under", "call_rate_under", "tool_rate_limit",
     "per_key_rate_limit", "tool_quota_per_period",
+    "flow_progression",
 ]

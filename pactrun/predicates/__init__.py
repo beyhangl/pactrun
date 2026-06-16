@@ -18,6 +18,7 @@ from pactrun.predicates.timing import max_latency, session_timeout, max_turns
 from pactrun.predicates.behavioral import (
     no_loops, max_retries, drift_bounds, no_repeated_output, tool_error_rate_under,
 )
+from pactrun.predicates.flow import flow_progression
 from pactrun.predicates.ratelimit import (
     spend_rate_under, call_rate_under, tool_rate_limit,
     per_key_rate_limit, tool_quota_per_period,
@@ -39,6 +40,8 @@ __all__ = [
     "max_latency", "session_timeout", "max_turns",
     # Behavioral
     "no_loops", "max_retries", "drift_bounds", "no_repeated_output", "tool_error_rate_under",
+    # Flow
+    "flow_progression",
     # Rate limits
     "spend_rate_under", "call_rate_under", "tool_rate_limit",
     "per_key_rate_limit", "tool_quota_per_period",
