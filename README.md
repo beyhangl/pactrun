@@ -61,19 +61,22 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **302 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **450 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | One-line `pactrun.wrap()` pre-call gate — real-tokenizer cost (tiktoken/litellm), **async + streaming** | EU AI Act / compliance document export |
 | Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
 | Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
-| 29 built-in predicates (cost, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**) | Formal multi-agent composition |
+| 38 built-in predicates (cost, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
-| **Argument-level tool guards** — JSON-Schema match, destructive-command block, path-sandbox | |
-| **Output integrity** — `valid_json` / `json_schema_valid` / `no_secrets` credential-leak scan | |
-| **Windowed rate limits** — rolling spend / call / per-tool caps (event-time) | |
-| **Built-in webhook escalation** — generic JSON or chat-webhook shape, throttled | |
+| **Argument-level tool guards** — JSON-Schema match, destructive-command block, path-sandbox, **per-field value allow/deny**, **required disclosure** | |
+| **Egress / SSRF guard** — host allow/deny + CIDR + block-private (`tool_host_within`) | |
+| **Consent gating** — fresh, action-bound, HMAC-signable consent tokens per tool call | |
+| **Output integrity** — `valid_json` / `json_schema_valid` / `no_secrets` + **cross-tenant isolation** | |
+| **Rate & quota** — rolling spend/call/tool windows, **per-recipient buckets**, **calendar quotas** | |
+| **Flow tracking** — ordered-stage drop-off diagnostics + out-of-order phase gate | |
+| **Escalation handlers** — built-in webhook (generic / chat) + **digest** (batched alerts) | |
 | Drift detection (Page-Hinkley + EWMA) | |
 | OpenAI + Anthropic + Gemini + LangChain/LangGraph + LiteLLM/CrewAI + **MCP** adapters | |
 | `@contract.enforce` decorator | |
@@ -290,13 +293,25 @@ contract = (
 )
 ```
 
-`webhook_handler(url, mode="generic"|"chat")` POSTs the violation (your own JSON endpoint or a chat-webhook shape) with per-clause throttling; `cli_approver()` prompts on the terminal, and any `(violation) -> bool` works as a headless policy gate (a missing or erroring approver fails closed). `retry` and `fallback` are control-flow actions handled by `@contract.enforce` (which owns the call); outside the decorator they surface as `RetrySignal` / `FallbackSignal` for you to handle. See [`examples/recovery.py`](examples/recovery.py).
+`webhook_handler(url, mode="generic"|"chat")` POSTs the violation (your own JSON endpoint or a chat-webhook shape) with per-clause throttling; `cli_approver()` prompts on the terminal, and any `(violation) -> bool` works as a headless policy gate (a missing or erroring approver fails closed). Wrap any escalation handler in `digest(...)` to batch a flood of violations into one aggregated alert per window instead of one message each:
+
+```python
+from pactrun import webhook_handler
+from pactrun.recovery import digest
+
+# One summarized alert per 30s (count, first/last, samples) instead of a storm:
+contract = Contract("agent").require(cost_under(0.05), on_fail="escalate").on_escalate(
+    digest(webhook_handler("https://hooks.example.com/agents"), window="30s")
+)
+```
+
+`retry` and `fallback` are control-flow actions handled by `@contract.enforce` (which owns the call); outside the decorator they surface as `RetrySignal` / `FallbackSignal` for you to handle. See [`examples/recovery.py`](examples/recovery.py).
 
 ---
 
 ## Built-in predicates
 
-All 29 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
+All 38 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
 
 | Group | Predicate | What it checks |
 |---|---|---|
@@ -311,6 +326,10 @@ All 29 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or refe
 | **Tool args** | `tool_args_match(tool, schema)` | a tool's call arguments validate against a JSON Schema |
 | | `no_destructive_args(tool=None, extra=None)` | tool args don't carry a destructive command (`rm -rf`, `DROP TABLE`, …) |
 | | `tool_path_within(root, tool=None, arg_keys=None)` | path-like args stay inside a sandbox root (no `..` escape) |
+| | `tool_arg_value_guard(tool, field, deny=/allow=, …)` | a dotted-path arg field is allow/deny-listed (exact/ci/glob/regex), with optional once-per-session dedupe |
+| | `required_disclosure(tool, arg, must_contain, …)` | a tool arg must contain required disclosure phrase(s) before the call fires (fail-closed) |
+| | `tool_host_within(allow=/deny=/block_private=, …)` | URL/host args reach only allowed hosts (globs + CIDR; blocks private/metadata IPs) |
+| | `consent_token_required(tools, bind_args=, secret=, …)` | a fresh, action-bound (HMAC-signable) consent token was presented for the call |
 | **Output** | `no_pii()` | no email / SSN / phone / card number in output |
 | | `output_contains(substring, case_sensitive=True)` | final output contains a string |
 | | `output_matches(pattern)` | final output matches a regex |
@@ -319,16 +338,21 @@ All 29 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or refe
 | | `valid_json()` | the final output parses as JSON |
 | | `json_schema_valid(schema)` | the final output is JSON that validates against a schema |
 | | `no_secrets(scan_tool_args=False)` | output (and optionally tool args) carries no API keys / tokens / private keys |
+| | `tenant_response_isolation(tenant_key="tenant", …)` | a response tagged for another tenant never surfaces in this run (fail-closed) |
 | **Timing** | `max_latency(max_ms)` | no single event exceeds a latency |
 | | `session_timeout(max_ms)` | whole session completes within a time budget |
 | | `max_turns(n)` | session does not exceed N turns |
 | **Rate limit** | `spend_rate_under(max_usd, window_s)` | LLM spend within a rolling time window stays under a cap |
 | | `call_rate_under(max_calls, window_s)` | LLM-call count within a rolling window stays under a cap |
 | | `tool_rate_limit(tool, max_calls, per_seconds)` | one tool's invocation rate within a window stays under a cap |
+| | `per_key_rate_limit(tool, key_path, max_calls, per_seconds)` | independent rolling windows **per extracted arg value** (e.g. per recipient) |
+| | `tool_quota_per_period(tool, limit, period="month", …)` | calendar-anchored quota that **resets** on the day/week/month boundary |
 | **Behavioral** | `no_loops(window=5, threshold=0.8)` | recent tool calls aren't a repeating loop |
 | | `max_retries(n, tool=None)` | no more than N consecutive identical tool calls |
 | | `drift_bounds(cost_pct=None, tokens_pct=None)` | per-turn metrics stay within N% of the session average |
 | | `no_repeated_output(window=3)` | agent doesn't repeat identical outputs |
+| | `tool_error_rate_under(max_rate=0.3, window=10, min_calls=3)` | rolling tool-failure fraction stays under a ceiling |
+| **Flow** | `flow_progression(stages, mode="diagnostic"\|"gate", …)` | run reaches ordered milestones (drop-off report) or is gated against out-of-order phases |
 
 Custom predicates are a small function — register one with `@predicate("my_check")` returning a `(event, state) -> PredicateResult` checker.
 
@@ -377,7 +401,7 @@ Installing pactrun adds a `pactrun` command:
 pactrun init --name support_agent      # scaffold contracts/support_agent.yaml
 pactrun validate contracts/            # validate one file or a whole directory
 pactrun show contracts/support_agent.yaml   # pretty-print a contract's clauses
-pactrun predicates                     # list the 29 built-in predicates
+pactrun predicates                     # list the 38 built-in predicates
 ```
 
 ```text
@@ -485,7 +509,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/pactrun
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 302 tests
+pytest        # 450 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.
