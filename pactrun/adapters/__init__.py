@@ -21,4 +21,7 @@ def __getattr__(name: str):
     if name == "LiteLLMAdapter":
         from pactrun.adapters.litellm import LiteLLMAdapter
         return LiteLLMAdapter
+    if name == "GuardedMCPSession":
+        from pactrun.adapters.mcp import GuardedMCPSession
+        return GuardedMCPSession
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
