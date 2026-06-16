@@ -12,7 +12,7 @@ from pactrun.predicates.tools import (
 )
 from pactrun.predicates.output import (
     no_pii, output_contains, output_matches, max_output_length, output_must_not_contain,
-    valid_json, json_schema_valid, no_secrets,
+    valid_json, json_schema_valid, no_secrets, tenant_response_isolation,
 )
 from pactrun.predicates.timing import max_latency, session_timeout, max_turns
 from pactrun.predicates.behavioral import (
@@ -34,7 +34,7 @@ __all__ = [
     "consent_token_required", "mint_consent_token",
     # Output
     "no_pii", "output_contains", "output_matches", "max_output_length", "output_must_not_contain",
-    "valid_json", "json_schema_valid", "no_secrets",
+    "valid_json", "json_schema_valid", "no_secrets", "tenant_response_isolation",
     # Timing
     "max_latency", "session_timeout", "max_turns",
     # Behavioral

@@ -212,3 +212,66 @@ def no_secrets(scan_tool_args: bool = False):
         return PredicateResult(passed=True)
     check.predicate_name = "no_secrets"  # type: ignore[attr-defined]
     return check
+
+
+@predicate("tenant_response_isolation")
+def tenant_response_isolation(
+    tenant_key="tenant",
+    *,
+    response_tag_key: str = "tenant",
+    known_tenants: list[str] | None = None,
+):
+    """Fail closed if a response carries a tenant tag other than the run's tenant.
+
+    A cross-customer-bleed guard, keyed on *provenance* rather than content
+    (the sibling of :func:`no_pii` / :func:`no_secrets`, which scan content).
+    The run's active tenant comes from ``state.metadata[tenant_key]`` — set it
+    with ``Session(metadata={"tenant": "acme"})`` — or from a
+    ``Callable[[SessionState], str]`` passed as ``tenant_key``. Each event's
+    tenant tag comes from ``event.metadata[response_tag_key]``.
+
+    - If the run has no bound tenant, the check **fails closed** (you asked for
+      isolation but didn't say whose data this is).
+    - If an event is tagged with a tenant different from the run's, it fails.
+    - With ``known_tenants``, the response text is also scanned for any *other*
+      tenant's identifier leaking into this run's output.
+    """
+    def _run_tenant(state: SessionState):
+        if callable(tenant_key):
+            return tenant_key(state)
+        return (state.metadata or {}).get(tenant_key)
+
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        active = _run_tenant(state)
+        if not active:
+            return PredicateResult(
+                passed=False,
+                expected="a bound run tenant",
+                actual="unbound",
+                message="tenant_response_isolation: no active tenant on the run (fail-closed)",
+            )
+
+        tag = (event.metadata or {}).get(response_tag_key)
+        if tag is not None and tag != active:
+            return PredicateResult(
+                passed=False,
+                expected=f"tenant == {active!r}",
+                actual=f"tenant == {tag!r}",
+                message=f"Response tagged for tenant {tag!r} surfaced in a {active!r} run",
+            )
+
+        if known_tenants:
+            text = str(event.output or "")
+            if text:
+                for other in known_tenants:
+                    if other != active and other in text:
+                        return PredicateResult(
+                            passed=False,
+                            expected=f"only {active!r} data in output",
+                            actual=f"found {other!r}",
+                            message=f"Output in a {active!r} run references another tenant {other!r}",
+                        )
+        return PredicateResult(passed=True)
+
+    check.predicate_name = "tenant_response_isolation"  # type: ignore[attr-defined]
+    return check

@@ -128,6 +128,12 @@ class Session:
         self._active = True
         self._token = _active_session.set(self)
 
+        # Seed session-scoped metadata into the shared state so predicates can
+        # read run-level context (e.g. the active tenant set via
+        # Session(metadata={...})). Existing state.metadata keys win.
+        for key, value in (self._metadata or {}).items():
+            self._state.metadata.setdefault(key, value)
+
         # Check preconditions
         dummy_event = Event(kind=EventKind.INPUT)
         for clause in self._contract.get_clauses(check_on="session_start"):
