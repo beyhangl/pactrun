@@ -168,7 +168,7 @@ class GuardedClient:
     def _precall_cost_gate(self, kwargs: dict) -> None:
         if self._budget is None:
             return
-        worst = _estimate_worstcase_cost(kwargs, self._max_tokens)
+        worst, tag = _estimate_worstcase_cost(kwargs, self._max_tokens)
         projected = self._session.state.total_cost_usd + worst
         if projected <= self._budget:
             return
@@ -179,7 +179,7 @@ class GuardedClient:
             on_fail=self._on_fail,
             message=(
                 f"pre-call refusal: worst-case cost ~${worst:.4f} would push the run to "
-                f"~${projected:.4f}, over the ${self._budget:.4f} budget"
+                f"~${projected:.4f}, over the ${self._budget:.4f} budget (cost basis: {tag})"
             ),
             expected=f"<= ${self._budget:.4f}",
             actual=f"~${projected:.4f} projected",
@@ -209,67 +209,23 @@ def _detect_kind(client: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Worst-case pre-call cost estimate
+# Cost estimation — delegates to pactrun.cost_model (real tokenizer + live
+# pricing via tiktoken/litellm when available, heuristic fallback otherwise).
 # ---------------------------------------------------------------------------
 
-# (input, output) USD per 1M tokens. Unknown models fall back to a conservative
-# default so the budget gate still errs toward refusing.
-_PRICING: dict[str, tuple[float, float]] = {
-    "gpt-5.4": (2.50, 15.00),
-    "gpt-4.1": (2.00, 8.00),
-    "gpt-4o": (2.50, 10.00),
-    "o3": (2.00, 8.00),
-    "o4-mini": (0.55, 2.20),
-    "claude-opus-4": (15.00, 75.00),
-    "claude-sonnet-4": (3.00, 15.00),
-    "claude-haiku-4": (0.80, 4.00),
-    "gemini-2.5-pro": (1.25, 10.00),
-    "gemini-2.5-flash": (0.30, 2.50),
-}
-_DEFAULT_PRICE = (2.50, 10.00)
+def _estimate_worstcase_cost(kwargs: dict, default_max_tokens: int) -> tuple[float, str]:
+    from pactrun import cost_model
 
-
-def _price(model: str) -> tuple[float, float]:
-    if model in _PRICING:
-        return _PRICING[model]
-    for key, prices in _PRICING.items():
-        if model.startswith(key):
-            return prices
-    return _DEFAULT_PRICE
-
-
-def _messages_text(kwargs: dict) -> str:
-    parts: list[str] = []
-    system = kwargs.get("system")
-    if isinstance(system, str):
-        parts.append(system)
-    for message in kwargs.get("messages", []) or []:
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
-            parts.append(content)
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and isinstance(block.get("text"), str):
-                    parts.append(block["text"])
-    return " ".join(parts)
-
-
-def _count_tokens(text: str) -> int:
-    # Deliberately a cheap heuristic (~4 chars/token); the output term dominates
-    # the worst case anyway. No tokenizer dependency.
-    return max(1, len(text) // 4)
-
-
-def _estimate_worstcase_cost(kwargs: dict, default_max_tokens: int) -> float:
     model = kwargs.get("model", "") or ""
-    input_tokens = _count_tokens(_messages_text(kwargs))
     max_output = (
         kwargs.get("max_tokens")
         or kwargs.get("max_completion_tokens")
         or default_max_tokens
     )
-    in_price, out_price = _price(model)
-    return (input_tokens * in_price + int(max_output) * out_price) / 1_000_000
+    return cost_model.precall_worstcase(
+        model, kwargs.get("messages"), max_output,
+        system=kwargs.get("system"), tools=kwargs.get("tools"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -337,5 +293,6 @@ def _record_anthropic(session: Any, kwargs: dict, response: Any) -> None:
 
 
 def _actual_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    in_price, out_price = _price(model)
-    return (prompt_tokens * in_price + completion_tokens * out_price) / 1_000_000
+    from pactrun import cost_model
+
+    return cost_model.actual_cost(model, prompt_tokens, completion_tokens)[0]
