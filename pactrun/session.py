@@ -65,6 +65,9 @@ class Session:
         self._escalation_handler = kwargs.get("escalation_handler") or getattr(
             contract, "escalation_handler", None
         )
+        # Optional observers (e.g. the OTel span emitter) — pure consumers of
+        # events and violations. No-op when none are registered.
+        self._observers = list(kwargs.get("observers") or [])
 
     # -- Properties --------------------------------------------------------
 
@@ -216,13 +219,22 @@ class Session:
         self._update_state(event)
         self._state.events.append(event)
 
+        for observer in self._observers:
+            observer.on_event(event, self._state)
+
         # Evaluate applicable clauses
         violations: list[Violation] = []
-        for clause in self._contract.get_clauses(check_on="every_event"):
-            result = clause.evaluate(event, self._state)
-            if not result.passed:
-                v = self._record_violation(clause, event, result)
-                violations.append(v)
+        try:
+            for clause in self._contract.get_clauses(check_on="every_event"):
+                result = clause.evaluate(event, self._state)
+                if not result.passed:
+                    v = self._record_violation(clause, event, result)
+                    violations.append(v)
+        finally:
+            for observer in self._observers:
+                end = getattr(observer, "on_event_end", None)
+                if end is not None:
+                    end(event)
 
         return violations
 
@@ -275,6 +287,11 @@ class Session:
             context_snapshot=self._state.to_dict(),
         )
         self._violations.append(violation)
+
+        for observer in self._observers:
+            notify = getattr(observer, "on_violation", None)
+            if notify is not None:
+                notify(violation, event)
 
         # Route to the recovery action (log / warn / block / escalate / retry /
         # fallback). Halting and control-flow actions raise; log/warn return.
