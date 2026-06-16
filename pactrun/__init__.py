@@ -13,7 +13,7 @@ from pactrun.core.models import (
 )
 from pactrun.contract import Contract
 from pactrun.session import Session, get_active_session
-from pactrun.recovery import EscalationError, RetrySignal, FallbackSignal
+from pactrun.recovery import EscalationError, RetrySignal, FallbackSignal, webhook_handler
 from pactrun.predicates.base import predicate, get_predicate, list_predicates
 from pactrun.predicates import (
     cost_under, cost_per_turn_under, token_budget,
@@ -30,7 +30,7 @@ from pactrun.wrap import wrap
 __all__ = [
     "ClauseKind", "EventKind", "OnFail", "Severity",
     "ContractLoadError", "ViolationError",
-    "EscalationError", "RetrySignal", "FallbackSignal",
+    "EscalationError", "RetrySignal", "FallbackSignal", "webhook_handler",
     "Clause", "Event", "PredicateResult", "SessionState", "SessionSummary", "Violation",
     "Contract", "Session", "get_active_session", "wrap",
     "predicate", "get_predicate", "list_predicates",

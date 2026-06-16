@@ -6,10 +6,12 @@ from pactrun.recovery.engine import (
     RetrySignal,
     apply_recovery,
 )
+from pactrun.recovery.webhook import webhook_handler
 
 __all__ = [
     "apply_recovery",
     "EscalationError",
     "RetrySignal",
     "FallbackSignal",
+    "webhook_handler",
 ]
