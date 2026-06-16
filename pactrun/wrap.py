@@ -77,6 +77,7 @@ def wrap(
     on_violation: str = "block",
     default_max_tokens: int = 4096,
     escalation_handler: Any = None,
+    approval_handler: Any = None,
 ) -> "GuardedClient":
     """Wrap an OpenAI/Anthropic client with a pre-call enforcement gate.
 
@@ -117,6 +118,7 @@ def wrap(
         on_fail=OnFail(on_violation),
         default_max_tokens=default_max_tokens,
         escalation_handler=escalation_handler,
+        approval_handler=approval_handler,
     )
 
 
@@ -139,6 +141,7 @@ class GuardedClient:
         on_fail: OnFail,
         default_max_tokens: int,
         escalation_handler: Any = None,
+        approval_handler: Any = None,
     ) -> None:
         self._client = client
         self._contract = contract
@@ -147,6 +150,7 @@ class GuardedClient:
         self._on_fail = on_fail
         self._max_tokens = default_max_tokens
         self._escalation_handler = escalation_handler
+        self._approval_handler = approval_handler
         self._kind, self._is_async = _detect_kind(client)
         guard = self._guard_async if self._is_async else self._guard
 
@@ -233,7 +237,11 @@ class GuardedClient:
             actual=f"~${projected:.4f} projected",
         )
         self._session._violations.append(violation)
-        apply_recovery(violation, escalation_handler=self._escalation_handler)
+        apply_recovery(
+            violation,
+            escalation_handler=self._escalation_handler,
+            approval_handler=self._approval_handler,
+        )
 
     def _record(self, kwargs: dict, response: Any) -> None:
         if self._kind == "openai":

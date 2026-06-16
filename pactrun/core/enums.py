@@ -17,6 +17,7 @@ class OnFail(str, Enum):
     WARN = "warn"
     BLOCK = "block"
     ESCALATE = "escalate"
+    APPROVE = "approve"
     RETRY = "retry"
     FALLBACK = "fallback"
 

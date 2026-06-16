@@ -55,6 +55,7 @@ class Contract:
     max_retries: int = 0
     fallback_fn: Callable | None = None
     escalation_handler: Callable | None = None
+    approval_handler: Callable | None = None
 
     # -- Fluent builder API ------------------------------------------------
 
@@ -184,6 +185,16 @@ class Contract:
     def on_escalate(self, handler: Callable) -> Contract:
         """Register a handler invoked when an `escalate`-action clause is violated."""
         self.escalation_handler = handler
+        return self
+
+    def on_approve(self, handler: Callable) -> Contract:
+        """Register an approval handler for `approve`-action clauses.
+
+        The handler receives the :class:`~pactrun.core.models.Violation` and
+        returns truthy to let the run proceed or falsy to block. A missing or
+        erroring handler fails closed (blocks).
+        """
+        self.approval_handler = handler
         return self
 
     # -- Query API ---------------------------------------------------------

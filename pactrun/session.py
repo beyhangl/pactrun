@@ -65,6 +65,11 @@ class Session:
         self._escalation_handler = kwargs.get("escalation_handler") or getattr(
             contract, "escalation_handler", None
         )
+        # Optional handler asked whether to allow an `approve`-action violation.
+        # Falls back to one configured on the contract via Contract.on_approve(...).
+        self._approval_handler = kwargs.get("approval_handler") or getattr(
+            contract, "approval_handler", None
+        )
         # Optional observers (e.g. the OTel span emitter) — pure consumers of
         # events and violations. No-op when none are registered.
         self._observers = list(kwargs.get("observers") or [])
@@ -295,7 +300,11 @@ class Session:
 
         # Route to the recovery action (log / warn / block / escalate / retry /
         # fallback). Halting and control-flow actions raise; log/warn return.
-        apply_recovery(violation, escalation_handler=self._escalation_handler)
+        apply_recovery(
+            violation,
+            escalation_handler=self._escalation_handler,
+            approval_handler=self._approval_handler,
+        )
 
         return violation
 

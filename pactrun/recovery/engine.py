@@ -12,6 +12,10 @@ Event-level actions (resolved the instant a clause is violated):
                   halting the run immediately.
 - ``ESCALATE``  — record + invoke an escalation handler (e.g. page a human /
                   fire a webhook), then raise :class:`EscalationError`.
+- ``APPROVE``   — record + ask an approval handler (human or policy) whether to
+                  proceed; allow the run to continue if it returns truthy,
+                  otherwise raise :class:`~pactrun.core.errors.ViolationError`.
+                  Fail-closed: a missing or erroring approver blocks.
 
 Execution-level actions (need control of the call, so they surface here as
 control-flow signals that :meth:`Contract.enforce <pactrun.Contract.enforce>`
@@ -55,12 +59,14 @@ def apply_recovery(
     violation: Violation,
     *,
     escalation_handler: Callable[[Violation], None] | None = None,
+    approval_handler: Callable[[Violation], bool] | None = None,
 ) -> None:
     """React to a single recorded violation according to its ``on_fail`` action.
 
-    Returns ``None`` for non-halting actions (``LOG`` / ``WARN``). Raises for
-    halting or control-flow actions (``BLOCK`` / ``ESCALATE`` / ``RETRY`` /
-    ``FALLBACK``). The violation is assumed already recorded by the caller.
+    Returns ``None`` for non-halting actions (``LOG`` / ``WARN``, and ``APPROVE``
+    when the approver allows it). Raises for halting or control-flow actions
+    (``BLOCK`` / ``ESCALATE`` / ``RETRY`` / ``FALLBACK``, and ``APPROVE`` when
+    denied). The violation is assumed already recorded by the caller.
     """
     action = violation.on_fail
 
@@ -81,6 +87,25 @@ def apply_recovery(
         if escalation_handler is not None:
             escalation_handler(violation)
         raise EscalationError(violation)
+
+    if action == OnFail.APPROVE:
+        # Human/policy-in-the-loop: ask an approver whether to let this proceed.
+        # Fail closed — no approver, or an approver that errors, blocks the run.
+        if approval_handler is None:
+            logger.error(
+                "contract violation [approve]: no approval_handler registered — blocking"
+            )
+            raise ViolationError(violation)
+        try:
+            allowed = approval_handler(violation)
+        except Exception as exc:  # noqa: BLE001 - a broken approver must not auto-approve
+            logger.error("contract violation [approve]: approver errored (%s) — blocking", exc)
+            raise ViolationError(violation) from exc
+        if allowed:
+            logger.warning("contract violation [approve]: approved — proceeding: %s", violation.message)
+            return
+        logger.error("contract violation [approve]: denied — blocking: %s", violation.message)
+        raise ViolationError(violation)
 
     if action == OnFail.RETRY:
         raise RetrySignal(violation)

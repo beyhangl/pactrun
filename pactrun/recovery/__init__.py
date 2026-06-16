@@ -7,6 +7,7 @@ from pactrun.recovery.engine import (
     apply_recovery,
 )
 from pactrun.recovery.webhook import webhook_handler
+from pactrun.recovery.approval import cli_approver, auto_approver
 
 __all__ = [
     "apply_recovery",
@@ -14,4 +15,6 @@ __all__ = [
     "RetrySignal",
     "FallbackSignal",
     "webhook_handler",
+    "cli_approver",
+    "auto_approver",
 ]
