@@ -61,20 +61,21 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **214 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **240 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
-| One-line `pactrun.wrap()` pre-call cost / tool / loop / drift gate | EU AI Act / compliance document export |
+| One-line `pactrun.wrap()` pre-call gate — real-tokenizer cost (tiktoken/litellm), **async + streaming** | EU AI Act / compliance document export |
 | Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
 | Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
 | 20 built-in predicates (cost, tools, output, timing, behavioral) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / retry / fallback | |
 | Drift detection (Page-Hinkley + EWMA) | |
-| OpenAI + Anthropic + Gemini + LangChain/LangGraph + LiteLLM/CrewAI adapters | |
+| OpenAI + Anthropic + Gemini + LangChain/LangGraph + LiteLLM/CrewAI + **MCP** adapters | |
 | `@contract.enforce` decorator | |
 | CLI (`init` / `validate` / `show` / `predicates`) | |
 | pytest plugin (`@pytest.mark.contracted`) | |
+| **OpenTelemetry GenAI** span emitter (experimental) | |
 
 ---
 
@@ -179,6 +180,36 @@ print(session.summary().is_compliant)
 ```
 
 For async or multi-threaded runs where the active-session contextvar may not propagate to the callback, pass the session explicitly: `PactrunCallbackHandler(session=session)`.
+
+### MCP (Model Context Protocol)
+
+Wrap an MCP `ClientSession` so your tool contracts apply to its tool calls — the whole tool-predicate suite works for free, plus an optional `block_destructive` policy driven by the server's own annotations:
+
+```python
+from pactrun import Contract, must_not_call
+from pactrun.adapters import GuardedMCPSession
+
+contract = Contract("mcp_agent").forbid(must_not_call("delete_file"))
+guarded = GuardedMCPSession(client_session, contract, block_destructive=True)
+await guarded.initialize()
+await guarded.call_tool("read_file", {"path": "a.txt"})    # ok
+await guarded.call_tool("delete_file", {"path": "a.txt"})  # raises ViolationError
+```
+
+`destructiveHint` is an advisory, possibly-untrusted hint, so `block_destructive` is defense-in-depth — pair it with an explicit `tools_allowed` for high assurance. (`pip install "pactrun[mcp]"`)
+
+### OpenTelemetry (experimental)
+
+Attach an `OTelObserver` and pactrun emits standard `gen_ai.*` spans for every LLM and tool call, marking the span `ERROR` when a contract is violated — so your runtime contracts show up in Langfuse / Arize Phoenix / Datadog / any OTLP backend:
+
+```python
+from pactrun.observability import OTelObserver
+
+with contract.session(observers=[OTelObserver()]) as session:
+    ...
+```
+
+Experimental — tracks the OpenTelemetry GenAI semantic conventions (Development status), pinned to v1.27. (`pip install "pactrun[otel]"`)
 
 ---
 
@@ -429,7 +460,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/pactrun
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 214 tests
+pytest        # 240 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.
