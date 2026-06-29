@@ -9,6 +9,7 @@ from pactrun.predicates.tools import (
     tool_args_match, no_destructive_args, tool_path_within,
     tool_arg_value_guard, required_disclosure, tool_host_within,
     consent_token_required, mint_consent_token,
+    no_exfiltration_after_untrusted, lethal_trifecta_guard,
 )
 from pactrun.predicates.output import (
     no_pii, output_contains, output_matches, max_output_length, output_must_not_contain,
@@ -34,6 +35,7 @@ __all__ = [
     "tool_args_match", "no_destructive_args", "tool_path_within",
     "tool_arg_value_guard", "required_disclosure", "tool_host_within",
     "consent_token_required", "mint_consent_token",
+    "no_exfiltration_after_untrusted", "lethal_trifecta_guard",
     # Output
     "no_pii", "output_contains", "output_matches", "max_output_length", "output_must_not_contain",
     "valid_json", "json_schema_valid", "no_secrets", "tenant_response_isolation",
