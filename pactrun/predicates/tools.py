@@ -608,7 +608,7 @@ def _extract_host(value: str):
     if not v:
         return None
     try:
-        netloc_form = v if "://" in v else "//" + v
+        netloc_form = v if ("://" in v or v.startswith("//")) else "//" + v
         host = urlsplit(netloc_form).hostname
     except ValueError:
         return None
