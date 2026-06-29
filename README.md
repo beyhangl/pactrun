@@ -61,18 +61,20 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **450 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **520 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | One-line `pactrun.wrap()` pre-call gate — real-tokenizer cost (tiktoken/litellm), **async + streaming** | EU AI Act / compliance document export |
 | Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
 | Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
-| 38 built-in predicates (cost, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**) | Formal multi-agent composition |
+| 43 built-in predicates (cost, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
+| **Prompt-injection & exfiltration defense** — hidden-text scan, output link/image exfil guard, untrusted→exfil chain & lethal-trifecta tripwires | |
 | **Argument-level tool guards** — JSON-Schema match, destructive-command block, path-sandbox, **per-field value allow/deny**, **required disclosure** | |
 | **Egress / SSRF guard** — host allow/deny + CIDR + block-private (`tool_host_within`) | |
-| **Consent gating** — fresh, action-bound, HMAC-signable consent tokens per tool call | |
+| **Human-in-the-loop** — single consent tokens **and N-of-M dual-control quorum** (HMAC-signable) | |
+| **Tamper-evident audit log** — hash-chained JSONL ledger + offline `verify_audit_log()` | |
 | **Output integrity** — `valid_json` / `json_schema_valid` / `no_secrets` + **cross-tenant isolation** | |
 | **Rate & quota** — rolling spend/call/tool windows, **per-recipient buckets**, **calendar quotas** | |
 | **Flow tracking** — ordered-stage drop-off diagnostics + out-of-order phase gate | |
@@ -218,6 +220,21 @@ with contract.session(observers=[OTelObserver()]) as session:
 
 Experimental — tracks the OpenTelemetry GenAI semantic conventions (Development status), pinned to v1.27. (`pip install "pactrun[otel]"`)
 
+### Tamper-evident audit log
+
+For a durable record-keeping trail (rather than ephemeral spans), attach an `AuditLogObserver`. It writes an append-only, hash-chained JSONL ledger — one record per event and violation — that `verify_audit_log()` can later prove was not altered, deleted, or reordered. A `secret` upgrades the chain to HMAC; sensitive arg keys are redacted and outputs hashed by default.
+
+```python
+from pactrun.observability import AuditLogObserver, verify_audit_log
+
+with contract.session(observers=[AuditLogObserver("audit.jsonl", secret=KEY)]) as session:
+    ...
+
+report = verify_audit_log("audit.jsonl", secret=KEY)   # report.intact == True
+```
+
+Stdlib only — no extra install. Useful for record-keeping obligations like EU AI Act Art. 12.
+
 ---
 
 ## Drift detection
@@ -311,7 +328,7 @@ contract = Contract("agent").require(cost_under(0.05), on_fail="escalate").on_es
 
 ## Built-in predicates
 
-All 38 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
+All 43 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
 
 | Group | Predicate | What it checks |
 |---|---|---|
@@ -330,6 +347,11 @@ All 38 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or refe
 | | `required_disclosure(tool, arg, must_contain, …)` | a tool arg must contain required disclosure phrase(s) before the call fires (fail-closed) |
 | | `tool_host_within(allow=/deny=/block_private=, …)` | URL/host args reach only allowed hosts (globs + CIDR; blocks private/metadata IPs) |
 | | `consent_token_required(tools, bind_args=, secret=, …)` | a fresh, action-bound (HMAC-signable) consent token was presented for the call |
+| | `multi_party_approval_required(tools, n_required=2, approvers=, …)` | ≥ N distinct, signed, action-bound approver tokens (dual-control quorum) |
+| **Injection / exfil** | `no_exfiltration_after_untrusted(untrusted_tools, exfil_tools, …)` | blocks an outbound call that fires *after* untrusted content entered the run |
+| | `lethal_trifecta_guard(untrusted_sources, private_data_tools, egress_tools, …)` | fails a run that combines untrusted input + private data + external egress |
+| | `no_invisible_text(scan, detect, …)` | flags zero-width / Unicode-Tags / bidi-override smuggled instructions |
+| | `no_exfil_links(allow_hosts=, block_images=True, …)` | output markdown/HTML links & images reach only allowed hosts (zero-click exfil) |
 | **Output** | `no_pii()` | no email / SSN / phone / card number in output |
 | | `output_contains(substring, case_sensitive=True)` | final output contains a string |
 | | `output_matches(pattern)` | final output matches a regex |
@@ -401,7 +423,7 @@ Installing pactrun adds a `pactrun` command:
 pactrun init --name support_agent      # scaffold contracts/support_agent.yaml
 pactrun validate contracts/            # validate one file or a whole directory
 pactrun show contracts/support_agent.yaml   # pretty-print a contract's clauses
-pactrun predicates                     # list the 38 built-in predicates
+pactrun predicates                     # list the 43 built-in predicates
 ```
 
 ```text
@@ -509,7 +531,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/pactrun
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 450 tests
+pytest        # 520 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.
