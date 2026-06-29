@@ -6,4 +6,8 @@ def __getattr__(name):
         from pactrun.observability import otel
 
         return getattr(otel, name)
+    if name in ("AuditLogObserver", "verify_audit_log", "AuditReport"):
+        from pactrun.observability import audit
+
+        return getattr(audit, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
