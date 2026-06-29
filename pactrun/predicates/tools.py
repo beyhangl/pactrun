@@ -654,6 +654,80 @@ def lethal_trifecta_guard(
     return check
 
 
+@predicate("multi_party_approval_required")
+def multi_party_approval_required(
+    tools,
+    n_required: int = 2,
+    approvers=None,
+    *,
+    bind_args: list[str] | None = None,
+    token_key: str = "approvals",
+    max_age_s: float | None = 600,
+    secret=None,
+):
+    """Dual-control: a high-risk tool needs a quorum of distinct signed approvals.
+
+    A call to a tool in ``tools`` passes only when at least ``n_required`` valid,
+    unexpired, action-bound approval tokens from **distinct** approver identities
+    are presented at ``event.metadata[token_key]`` (or ``state.metadata`` as a
+    fallback) — the classic two-person rule for irreversible actions (wire
+    transfers, prod deploys). Two tokens from the same approver count once.
+
+    Each token is ``{"approver", "action", "sig", "issued_at"}`` from
+    :func:`mint_approval_token`. The signature covers the approver id and the
+    bound argument values, so a token can't be re-pointed to another approver or
+    a different call. ``approvers`` (if given) restricts who may sign; ``secret``
+    upgrades the signature to an HMAC.
+    """
+    tools_set = {tools} if isinstance(tools, str) else set(tools)
+    approvers_set = set(approvers) if approvers else None
+
+    def check(event: Event, state: SessionState) -> PredicateResult:
+        if event.kind != EventKind.TOOL_CALL or event.tool_name not in tools_set:
+            return PredicateResult(passed=True)
+        raw = (event.metadata or {}).get(token_key)
+        if raw is None:
+            raw = (state.metadata or {}).get(token_key)
+        if isinstance(raw, dict):
+            tokens = [raw]
+        elif isinstance(raw, (list, tuple)):
+            tokens = list(raw)
+        else:
+            tokens = []
+
+        import hmac
+        import time
+
+        approved: set = set()
+        for tok in tokens:
+            if not isinstance(tok, dict):
+                continue
+            approver = tok.get("approver")
+            if not approver:
+                continue
+            if approvers_set is not None and approver not in approvers_set:
+                continue
+            expected = _approval_sig(approver, event.tool_name, event.tool_args, bind_args, secret)
+            if not hmac.compare_digest(str(tok.get("sig", "")), expected):
+                continue
+            if max_age_s is not None:
+                issued = tok.get("issued_at")
+                if not isinstance(issued, (int, float)) or (time.time() - issued) > max_age_s:
+                    continue
+            approved.add(approver)
+
+        n = len(approved)
+        return PredicateResult(
+            passed=n >= n_required,
+            expected=f">= {n_required} distinct approvals for '{event.tool_name}'",
+            actual=f"{n} valid distinct approval(s)",
+            message=f"Tool '{event.tool_name}' needs {n_required} distinct approvals; got {n}",
+        )
+
+    check.predicate_name = "multi_party_approval_required"  # type: ignore[attr-defined]
+    return check
+
+
 def _args_blob(tool_args) -> str:
     import json
 
@@ -825,6 +899,43 @@ def mint_consent_token(
     sig = _action_sig(action, args or {}, bind_args, secret)
     return {
         "action": action,
+        "sig": sig,
+        "issued_at": time.time() if issued_at is None else issued_at,
+    }
+
+
+def _approval_sig(approver: str, action: str, tool_args, bind_args, secret) -> str:
+    """Signature for an approval token, binding the approver id + action + args."""
+    import hashlib
+    import hmac
+    import json
+
+    payload = {"approver": approver, "action": action}
+    if bind_args:
+        payload["args"] = {k: _resolve_path(tool_args or {}, k)[1] for k in bind_args}
+    msg = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    if secret:
+        key = secret if isinstance(secret, (bytes, bytearray)) else str(secret).encode("utf-8")
+        return hmac.new(key, msg, hashlib.sha256).hexdigest()
+    return hashlib.sha256(msg).hexdigest()
+
+
+def mint_approval_token(
+    approver: str,
+    *,
+    tool: str,
+    args: dict | None = None,
+    bind_args: list[str] | None = None,
+    secret=None,
+    issued_at: float | None = None,
+) -> dict:
+    """Produce one approver's token for :func:`multi_party_approval_required`."""
+    import time
+
+    sig = _approval_sig(approver, tool, args or {}, bind_args, secret)
+    return {
+        "approver": approver,
+        "action": tool,
         "sig": sig,
         "issued_at": time.time() if issued_at is None else issued_at,
     }
