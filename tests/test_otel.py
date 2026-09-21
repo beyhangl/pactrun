@@ -36,7 +36,8 @@ def test_llm_call_emits_gen_ai_span(pact_spans):
     assert attrs["gen_ai.usage.input_tokens"] == 30
     assert attrs["gen_ai.usage.output_tokens"] == 12
     assert attrs["gen_ai.provider.name"] == "openai"
-    assert attrs["gen_ai.usage.cost"] == pytest.approx(0.001)
+    assert attrs["pactrun.usage.cost"] == pytest.approx(0.001)
+    assert "gen_ai.usage.cost" not in attrs  # not a GenAI convention attribute
 
 
 def test_tool_call_emits_span(pact_spans):
@@ -60,3 +61,62 @@ def test_no_observer_is_a_clean_noop():
     with Contract("t").session() as s:
         s.emit_llm_response(model="gpt-4.1", output="hi", cost=0.001)
     assert s.is_compliant
+
+
+# ---------------------------------------------------------------------------
+# GenAI-convention conformance
+# ---------------------------------------------------------------------------
+
+def _observer(**kw):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return OTelObserver(tracer_provider=provider, **kw), exporter
+
+
+def test_execute_tool_span_is_internal_not_client():
+    from opentelemetry.trace import SpanKind
+
+    observer, exporter = _observer()
+    with Contract("t").session(observers=[observer]) as s:
+        s.emit_tool_call("search", args={"q": "x"})
+    span = exporter.get_finished_spans()[0]
+    # The conventions say execute_tool spans SHOULD be INTERNAL.
+    assert span.kind is SpanKind.INTERNAL
+    assert dict(span.attributes)["gen_ai.operation.name"] == "execute_tool"
+
+
+def test_chat_span_stays_client():
+    from opentelemetry.trace import SpanKind
+
+    observer, exporter = _observer()
+    with Contract("t").session(observers=[observer]) as s:
+        s.emit_llm_response(model="gpt-4.1", output="hi")
+    assert exporter.get_finished_spans()[0].kind is SpanKind.CLIENT
+
+
+def test_unknown_provider_is_omitted_not_invalid():
+    observer, exporter = _observer()
+    with Contract("t").session(observers=[observer]) as s:
+        s.emit_llm_response(model="some-inhouse-model", output="hi")
+    attrs = dict(exporter.get_finished_spans()[0].attributes)
+    # provider.name is an enum; a placeholder would be invalid, so omit it.
+    assert "gen_ai.provider.name" not in attrs
+    assert attrs.get("gen_ai.system") is None
+
+
+def test_explicit_provider_override_is_used():
+    observer, exporter = _observer(provider="aws.bedrock")
+    with Contract("t").session(observers=[observer]) as s:
+        s.emit_llm_response(model="some-inhouse-model", output="hi")
+    attrs = dict(exporter.get_finished_spans()[0].attributes)
+    assert attrs["gen_ai.provider.name"] == "aws.bedrock"
+
+
+def test_legacy_system_attribute_can_be_disabled():
+    observer, exporter = _observer(emit_legacy_system=False)
+    with Contract("t").session(observers=[observer]) as s:
+        s.emit_llm_response(model="gpt-4.1", output="hi")
+    attrs = dict(exporter.get_finished_spans()[0].attributes)
+    assert attrs["gen_ai.provider.name"] == "openai"
+    assert "gen_ai.system" not in attrs  # removed from the GenAI registry

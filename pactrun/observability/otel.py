@@ -12,8 +12,13 @@ OTLP backend. Attach it to a session:
     with contract.session(observers=[OTelObserver()]):
         ...
 
-Status: experimental — tracks the OpenTelemetry GenAI semantic conventions
-(Development status), pinned to v1.27. Not "stable / standard-compliant".
+Status: experimental. The GenAI semantic conventions moved out of the core
+OpenTelemetry semconv repo (core v1.42.0, June 2026) into a dedicated
+repository that has **not cut a release yet** — so there is no stable version
+to target. Every ``gen_ai.*`` attribute is still Development status, and the
+Python constants for them are all marked deprecated pending that release, so
+this module writes the attribute names as literals on purpose. Not
+"stable / standard-compliant".
 """
 
 from __future__ import annotations
@@ -33,7 +38,13 @@ except ImportError as exc:  # pragma: no cover - only without the extra
     ) from exc
 
 
-def _provider_of(model: str) -> str:
+def _provider_of(model: str) -> str | None:
+    """Best-effort map a model name to a ``gen_ai.provider.name`` enum member.
+
+    Returns ``None`` when the provider cannot be determined. The attribute is
+    an enum in the GenAI conventions, so emitting a placeholder like "unknown"
+    would be invalid — omitting it is the conformant choice.
+    """
     m = (model or "").lower()
     if m.startswith(("gpt", "o1", "o3", "o4")):
         return "openai"
@@ -41,12 +52,14 @@ def _provider_of(model: str) -> str:
         return "anthropic"
     if m.startswith("gemini"):
         return "gcp.gemini"
-    return "unknown"
+    return None
 
 
 def _set_system(span: Any, provider: str) -> None:
-    # gen_ai.system was renamed to gen_ai.provider.name in semconv v1.37; the
-    # installed 0.48b0 ships only gen_ai.system. Set the old constant too.
+    # `gen_ai.system` was renamed to `gen_ai.provider.name` and has since been
+    # removed from the GenAI registry entirely. Still emitted by default
+    # because deployed backends continue to read it; disable with
+    # OTelObserver(emit_legacy_system=False).
     try:
         from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as ga
 
@@ -58,20 +71,32 @@ def _set_system(span: Any, provider: str) -> None:
 class OTelObserver:
     """Emits ``gen_ai.*`` CLIENT spans per event; sets ERROR status on violations."""
 
-    def __init__(self, tracer_provider: Any = None, semconv_version: str = "1.27") -> None:
-        provider = tracer_provider or trace.get_tracer_provider()
-        self._tracer = provider.get_tracer("pactrun")
+    def __init__(
+        self,
+        tracer_provider: Any = None,
+        semconv_version: str = "unreleased",
+        *,
+        provider: str | None = None,
+        emit_legacy_system: bool = True,
+    ) -> None:
+        tp = tracer_provider or trace.get_tracer_provider()
+        self._tracer = tp.get_tracer("pactrun")
         self._semconv_version = semconv_version
+        self._provider = provider
+        self._emit_legacy_system = emit_legacy_system
         self._open: dict[str, Any] = {}
 
     def on_event(self, event: Any, state: Any) -> None:
         if event.kind == EventKind.LLM_CALL:
             name = f"chat {event.model or 'unknown'}"
+            kind = SpanKind.CLIENT
         elif event.kind == EventKind.TOOL_CALL:
             name = f"execute_tool {event.tool_name or 'unknown'}"
+            # The GenAI conventions say execute_tool spans SHOULD be INTERNAL.
+            kind = SpanKind.INTERNAL
         else:
             return
-        span = self._tracer.start_span(name, kind=SpanKind.CLIENT)
+        span = self._tracer.start_span(name, kind=kind)
         self._set_attributes(span, event)
         self._open[event.id] = span
 
@@ -99,16 +124,22 @@ class OTelObserver:
         if event.kind == EventKind.LLM_CALL:
             span.set_attribute("gen_ai.operation.name", "chat")
             if event.model:
-                provider = _provider_of(event.model)
                 span.set_attribute("gen_ai.request.model", event.model)
-                span.set_attribute("gen_ai.provider.name", provider)  # v1.37 name
-                _set_system(span, provider)                            # v1.27 name
+            # provider.name is Required on inference spans, so resolve it even
+            # for a model-less event; omit entirely when it cannot be derived
+            # rather than emitting a non-enum placeholder.
+            provider = self._provider or _provider_of(event.model or "")
+            if provider:
+                span.set_attribute("gen_ai.provider.name", provider)
+                if self._emit_legacy_system:
+                    _set_system(span, provider)
             span.set_attribute("gen_ai.usage.input_tokens", int(event.prompt_tokens or 0))
             span.set_attribute("gen_ai.usage.output_tokens", int(event.completion_tokens or 0))
             if event.cost_usd:
-                # pactrun extra (the GenAI spec omits cost); from the real
-                # post-call usage, not the pre-call worst-case estimate.
-                span.set_attribute("gen_ai.usage.cost", float(event.cost_usd))
+                # Cost is NOT a GenAI convention attribute - the registry only
+                # defines gen_ai.usage.{input,output}_tokens - so keep it in
+                # pactrun's own namespace instead of squatting gen_ai.*.
+                span.set_attribute("pactrun.usage.cost", float(event.cost_usd))
         elif event.kind == EventKind.TOOL_CALL:
             span.set_attribute("gen_ai.operation.name", "execute_tool")
             if event.tool_name:
