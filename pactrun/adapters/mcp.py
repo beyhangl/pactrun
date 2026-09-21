@@ -24,6 +24,7 @@ carries no token/usage field, so MCP cost control is count-based
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pactrun.core.enums import ClauseKind, OnFail, Severity
@@ -37,6 +38,24 @@ except ImportError as exc:  # pragma: no cover - only without the extra
         "The 'mcp' package is required for the MCP adapter. "
         "Install it with: pip install 'pactrun[mcp]'"
     ) from exc
+
+logger = logging.getLogger("pactrun")
+
+
+def _hint(annotations: Any, camel: str, snake: str) -> Any:
+    """Read a tool annotation across MCP SDK spellings.
+
+    The MCP Python SDK renamed every model field from camelCase to snake_case
+    in v2 (the 2026-07-28 spec line), so ``ToolAnnotations.destructiveHint``
+    became ``destructive_hint``. Reading only the camelCase name silently
+    yields ``None`` on v2 — which makes ``destructive_policy="hint"`` fail
+    **open**, allowing every destructive tool while still reporting that
+    blocking is enabled. Accept both spellings.
+    """
+    value = getattr(annotations, camel, None)
+    if value is None:
+        value = getattr(annotations, snake, None)
+    return value
 
 
 class GuardedMCPSession:
@@ -106,12 +125,20 @@ class GuardedMCPSession:
                 ann = getattr(tool, "annotations", None)
                 if ann is None:
                     continue
-                if getattr(ann, "destructiveHint", None) is True:
+                if _hint(ann, "destructiveHint", "destructive_hint") is True:
                     self._destructive.add(tool.name)
-                if getattr(ann, "readOnlyHint", None) is True:
+                if _hint(ann, "readOnlyHint", "read_only_hint") is True:
                     self._readonly.add(tool.name)
-        except Exception:
-            pass
+        except Exception as exc:
+            # A silent failure here is indistinguishable from "this server
+            # declares no destructive tools", which would let the 'hint'
+            # policy fail open. Say so loudly instead.
+            logger.warning(
+                "pactrun: could not load MCP tool annotations (%s); "
+                "destructive_policy=%r has no annotations to act on",
+                exc,
+                self._destructive_policy,
+            )
 
     def _is_blocked_destructive(self, name: str) -> bool:
         if not self._block_destructive:
