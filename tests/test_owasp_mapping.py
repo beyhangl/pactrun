@@ -75,8 +75,11 @@ def test_predicate_exposes_owasp_attribute():
 
 
 def test_uncovered_risks_are_honestly_empty():
-    # Supply-chain and rogue-agent risks are deployment/registry concerns a
-    # runtime contract library cannot observe — they must not be fake-tagged.
+    # ASI10 (rogue agents) is an identity/orchestration concern a runtime
+    # contract library cannot observe — it must not be fake-tagged. ASI04 is
+    # covered only for the part we can actually see at runtime: a tool server
+    # mutating what it advertises mid-run. Package/registry compromise itself
+    # still happens outside the process.
     coverage = owasp_coverage()
-    assert coverage["ASI04"] == []
     assert coverage["ASI10"] == []
+    assert coverage["ASI04"] == ["tool_definitions_stable"]

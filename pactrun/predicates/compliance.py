@@ -18,6 +18,7 @@ def ai_disclosure_in_output(
     first_only: bool = True,
     pattern: bool = False,
     case_sensitive: bool = False,
+    on_behalf_of: str | None = None,
 ):
     """Require an AI-disclosure phrase in the first user-facing reply.
 
@@ -30,6 +31,12 @@ def ai_disclosure_in_output(
     ``must_contain`` is a phrase or list; ``match="any"`` needs one, ``"all"``
     needs every. ``pattern=True`` treats phrases as regexes. **Fail-closed**: a
     first reply that is missing, empty, or non-text fails (no disclosure present).
+
+    ``on_behalf_of`` enforces the *second* half of the obligation. The Art. 50
+    guidance expects an agent to disclose both that it is artificial **and the
+    person or entity it is acting for**; a reply that only says "I am an AI"
+    satisfies half of it. Set this to the principal's name and it must appear
+    in the same reply.
     """
     needles = [must_contain] if isinstance(must_contain, str) else list(must_contain)
     if match not in ("all", "any"):
@@ -49,7 +56,10 @@ def ai_disclosure_in_output(
     def _reply_ok(text) -> bool:
         if not isinstance(text, str) or not text:
             return False
-        return reducer(_present(text, n) for n in needles)
+        if not reducer(_present(text, n) for n in needles):
+            return False
+        # Art. 50 expects the principal to be named too, not just AI-ness.
+        return on_behalf_of is None or _present(text, on_behalf_of)
 
     def check(event: Event, state: SessionState) -> PredicateResult:
         replies = [e for e in state.events if e.kind in (EventKind.LLM_CALL, EventKind.OUTPUT)]

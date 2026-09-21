@@ -278,7 +278,13 @@ def tenant_response_isolation(
 # Invisible / smuggled-text codepoint classes (used by no_invisible_text).
 _ZERO_WIDTH_CPS = {0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0x180E, 0x00AD}
 _BIDI_CPS = {0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069}
-_VALID_INVIS_DETECT = {"zero_width", "tags_block", "bidi", "homoglyph"}
+_VALID_INVIS_DETECT = {"zero_width", "tags_block", "bidi", "variation_selectors", "homoglyph"}
+# U+FE0F is the emoji presentation selector and appears in ordinary text
+# (any emoji), so it is never flagged on its own. U+FE00-FE0E and the
+# Variation Selectors Supplement (U+E0100-E01EF) do not occur in normal
+# prose. A *run* of selectors is the smuggling signature: legitimate text
+# uses at most one per base character.
+_VS_RUN_THRESHOLD = 4
 _VALID_INVIS_SCAN = {"input", "output", "tool_result"}
 
 
@@ -299,7 +305,7 @@ def _homoglyph_hits(text: str):
 @predicate("no_invisible_text", owasp=("ASI01", "ASI06",))
 def no_invisible_text(
     scan=("input", "output", "tool_result"),
-    detect=("zero_width", "tags_block", "bidi"),
+    detect=("zero_width", "tags_block", "bidi", "variation_selectors"),
     max_occurrences: int = 0,
 ):
     """Flag hidden / smuggled-instruction codepoints in agent text surfaces.
@@ -312,6 +318,11 @@ def no_invisible_text(
     ``tool_result`` (where injected content arrives).
 
     ``detect`` selects classes: ``"zero_width"``, ``"tags_block"``, ``"bidi"``,
+    ``"variation_selectors"`` (a documented 100%-evasion channel against
+    several commercial guardrails: U+FE00-FE0E and the Variation Selectors
+    Supplement U+E0100-E01EF are flagged individually, and a run of 4+
+    selectors is flagged even when it is the ubiquitous emoji selector
+    U+FE0F, which is never flagged on its own),
     and the opt-in ``"homoglyph"`` (ASCII mixed with Cyrillic/Greek look-alikes
     — noisier, off by default). Fails when more than ``max_occurrences`` hidden
     codepoints are found. The message names the codepoints (``U+200B``) and
@@ -334,8 +345,24 @@ def no_invisible_text(
                 hits.append((cp, "zero_width"))
             elif "tags_block" in detect and 0xE0000 <= cp <= 0xE007F:
                 hits.append((cp, "tags_block"))
+            elif "variation_selectors" in detect and (
+                0xE0100 <= cp <= 0xE01EF or 0xFE00 <= cp <= 0xFE0E
+            ):
+                hits.append((cp, "variation_selectors"))
             elif "bidi" in detect and cp in _BIDI_CPS:
                 hits.append((cp, "bidi"))
+        if "variation_selectors" in detect:
+            # A run of selectors encodes smuggled data; one selector after a
+            # base character is ordinary emoji usage.
+            run = 0
+            for ch in text:
+                cp = ord(ch)
+                if 0xFE00 <= cp <= 0xFE0F or 0xE0100 <= cp <= 0xE01EF:
+                    run += 1
+                    if run == _VS_RUN_THRESHOLD:
+                        hits.append((cp, "variation_selectors"))
+                else:
+                    run = 0
         if "homoglyph" in detect:
             hits.extend(_homoglyph_hits(text))
         return hits

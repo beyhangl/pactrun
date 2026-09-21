@@ -61,16 +61,16 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **598 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **637 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | One-line `pactrun.wrap()` pre-call gate — real-tokenizer cost (tiktoken/litellm), **async + streaming** | EU AI Act / compliance document export |
 | Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
 | Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
-| 52 built-in predicates (cost, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
+| 53 built-in predicates (cost, **supply-chain**, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
-| **OWASP Agentic Top-10 (2026) mapping** — runtime controls for 8 of 10 risks, `pactrun predicates --owasp` | |
+| **OWASP Agentic Top-10 (2026) mapping** — runtime controls for 9 of 10 risks, `pactrun predicates --owasp` | |
 | **Prompt-injection & exfiltration defense** — hidden-text scan, output link/image exfil guard, untrusted→exfil chain, taint-to-sink, injection-phrase & canary-leak tripwires | |
 | **Argument-level tool guards** — JSON-Schema match, destructive-command block, path-sandbox, **per-field value allow/deny**, **required disclosure** | |
 | **Egress / SSRF guard** — host allow/deny + CIDR + block-private (`tool_host_within`) | |
@@ -235,7 +235,7 @@ with contract.session(observers=[AuditLogObserver("audit.jsonl", secret=KEY)]) a
 report = verify_audit_log("audit.jsonl", secret=KEY)   # report.intact == True
 ```
 
-Stdlib only — no extra install. Useful for record-keeping obligations like EU AI Act Art. 12.
+Stdlib only — no extra install. It is a **control that supports** record-keeping (the citable floor is EU AI Act Arts. 19/26(6): keep automatically generated logs for at least six months), **not** compliance with it. Art. 12 binds high-risk systems, which the Digital Omnibus deferred to Dec 2027/Aug 2028, specifies no field list, and does not require tamper-evidence — the hash chain is our design choice, not a statutory one.
 
 ---
 
@@ -330,14 +330,14 @@ contract = Contract("agent").require(cost_under(0.05), on_fail="escalate").on_es
 
 ## OWASP Agentic Top-10 coverage
 
-Predicates are tagged with the [OWASP Top 10 for Agentic Applications (2026)](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) risks they help mitigate. pactrun ships runtime controls for **8 of the 10**:
+Predicates are tagged with the [OWASP Top 10 for Agentic Applications (2026)](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) risks they help mitigate. pactrun ships runtime controls for **9 of the 10**:
 
 | Risk | Controls |
 |---|---|
 | **ASI01** Agent Goal Hijack | `no_injection_phrases` · `no_invisible_text` · `untrusted_taint_to_sink` · `no_exfiltration_after_untrusted` · `flow_progression` · `drift_bounds` · `canary_not_leaked` |
 | **ASI02** Tool Misuse & Exploitation | `tools_allowed` · `must_not_call` · `tool_args_match` · `no_destructive_args` · `tool_path_within` · `tool_arg_value_guard` · `tool_host_within` · `no_duplicate_side_effect` · rate/quota limits |
 | **ASI03** Identity & Privilege Abuse | `consent_token_required` · `multi_party_approval_required` · `tenant_response_isolation` · `no_secrets` · `lethal_trifecta_guard` |
-| **ASI04** Agentic Supply Chain | — *no runtime control* (registry/deployment concern) |
+| **ASI04** Agentic Supply Chain | `tool_definitions_stable` — catches a tool server that mutates what it advertises mid-run |
 | **ASI05** Unexpected Code Execution | `no_destructive_args` · `tool_path_within` |
 | **ASI06** Memory & Context Poisoning | `untrusted_taint_to_sink` · `lethal_trifecta_guard` · `no_exfil_links` · `no_invisible_text` · `no_pii` · `no_secrets` |
 | **ASI07** Insecure Inter-Agent Comms | `tool_host_within` |
@@ -355,7 +355,7 @@ A tag means the predicate is a **partial runtime control** for that risk — not
 
 ## Built-in predicates
 
-All 52 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
+All 53 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
 
 | Group | Predicate | What it checks |
 |---|---|---|
@@ -378,7 +378,7 @@ All 52 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or refe
 | **Injection / exfil** | `no_exfiltration_after_untrusted(untrusted_tools, exfil_tools, …)` | blocks an outbound call that fires *after* untrusted content entered the run |
 | | `lethal_trifecta_guard(untrusted_sources, private_data_tools, egress_tools, …)` | fails a run that combines untrusted input + private data + external egress |
 | | `untrusted_taint_to_sink(sink_tools, taint_key=, min_overlap=24, …)` | blocks a sink call whose args echo ≥N chars of prior taint-tagged content |
-| | `no_invisible_text(scan, detect, …)` | flags zero-width / Unicode-Tags / bidi-override smuggled instructions |
+| | `no_invisible_text(scan, detect, …)` | flags zero-width / Unicode-Tags / bidi-override / variation-selector smuggled instructions |
 | | `no_exfil_links(allow_hosts=, block_images=True, …)` | output markdown/HTML links & images reach only allowed hosts (zero-click exfil) |
 | **Content security** | `no_injection_phrases(scan, decode=, min_confidence=, …)` | untrusted inbound text carries no known prompt-injection signatures (opt. base64/url decode) |
 | | `canary_not_leaked(token, transforms=…)` | a planted system-prompt canary never appears in output (verbatim/base64/reversed) |
@@ -410,7 +410,8 @@ All 52 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or refe
 | | `no_progress_stall(max_turns_without_progress=4, …)` | fails when no progress (success or new output) happens within a budget |
 | | `no_duplicate_side_effect(tool, key_fields=, retry_token_field=, …)` | idempotency — the same side-effect isn't performed twice (unless a retry token changes) |
 | **Flow** | `flow_progression(stages, mode="diagnostic"\|"gate", …)` | run reaches ordered milestones (drop-off report) or is gated against out-of-order phases |
-| **Compliance** | `ai_disclosure_in_output(must_contain, first_only=True, …)` | the first user-facing reply discloses it's AI (then latches) |
+| **Compliance** | `ai_disclosure_in_output(must_contain, first_only=True, on_behalf_of=None, …)` | the first user-facing reply discloses it's AI — and, with `on_behalf_of`, who it acts for |
+| **Supply chain** | `tool_definitions_stable(metadata_key, tools=None)` | a tool's advertised definition doesn't change mid-run (rug-pull detection) |
 
 Custom predicates are a small function — register one with `@predicate("my_check")` returning a `(event, state) -> PredicateResult` checker.
 
@@ -459,7 +460,7 @@ Installing pactrun adds a `pactrun` command:
 pactrun init --name support_agent      # scaffold contracts/support_agent.yaml
 pactrun validate contracts/            # validate one file or a whole directory
 pactrun show contracts/support_agent.yaml   # pretty-print a contract's clauses
-pactrun predicates                     # list the 52 built-in predicates
+pactrun predicates                     # list the 53 built-in predicates
 ```
 
 ```text
@@ -567,7 +568,7 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 git clone https://github.com/beyhangl/pactrun
 cd agentpact
 pip install -e ".[dev]"
-pytest        # 598 tests
+pytest        # 637 tests
 ```
 
 PRs welcome — please open an issue first for significant changes.

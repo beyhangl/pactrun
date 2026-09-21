@@ -6,10 +6,24 @@ or reordering any record breaks the chain, which :func:`verify_audit_log`
 detects offline. With a ``secret`` the per-record digest is an HMAC, so an
 attacker who can't forge the MAC can't rewrite history undetectably.
 
-This supports record-keeping obligations (e.g. EU AI Act Art. 12 logging) that
-the ephemeral OTel spans and the in-memory digest can't: a durable, verifiable
-trail. Sensitive argument keys are redacted and model outputs are stored as a
-hash by default. Wire it in with ``Session(observers=[AuditLogObserver(path)])``.
+This gives you a durable, verifiable trail that the ephemeral OTel spans and
+the in-memory digest can't. It is a *control that supports* record-keeping
+obligations — not compliance with them. Read the scope honestly:
+
+- EU AI Act **Art. 12** record-keeping binds high-risk systems, whose
+  obligations were deferred by the Digital Omnibus to 2 Dec 2027 (standalone
+  Annex III) and 2 Aug 2028 (embedded in regulated products). Art. 12 also
+  specifies no field list and does **not** mandate tamper-evidence — the hash
+  chain here is a design choice, not a statutory requirement.
+- The hard, citable number is **Arts. 19 and 26(6): retain automatically
+  generated logs for at least six months.** That is what this file is for.
+- **Art. 50** transparency is the part that is enforceable today; see
+  :func:`~pactrun.predicates.compliance.ai_disclosure_in_output`.
+
+A log is one input to a conformity assessment, never the assessment.
+
+Sensitive argument keys are redacted and model outputs are stored as a hash by
+default. Wire it in with ``Session(observers=[AuditLogObserver(path)])``.
 
 stdlib only (``hashlib`` / ``hmac`` / ``json``).
 """

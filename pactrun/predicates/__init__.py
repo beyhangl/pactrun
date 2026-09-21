@@ -55,6 +55,7 @@ from pactrun.predicates.ratelimit import (
     tool_quota_per_period,
     tool_rate_limit,
 )
+from pactrun.predicates.supply_chain import tool_definitions_stable
 from pactrun.predicates.timing import max_latency, max_turns, session_timeout
 from pactrun.predicates.tool_args import (
     no_destructive_args,
@@ -89,6 +90,8 @@ __all__ = [
     "no_exfiltration_after_untrusted", "lethal_trifecta_guard", "untrusted_taint_to_sink",
     # Compliance
     "ai_disclosure_in_output",
+    # Supply chain
+    "tool_definitions_stable",
     # Output
     "no_pii", "output_contains", "output_matches", "max_output_length", "output_must_not_contain",
     "valid_json", "json_schema_valid", "no_secrets", "tenant_response_isolation",
