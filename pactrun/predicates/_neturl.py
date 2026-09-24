@@ -6,6 +6,9 @@ API — import paths here may change without notice.
 
 from __future__ import annotations
 
+import re
+import socket
+
 
 def _as_ip(host: str):
     import ipaddress
@@ -67,9 +70,62 @@ def _host_matches(host: str, patterns: list[str]) -> bool:
     return False
 
 
+def _canonical_hosts(host: str) -> list[str]:
+    """Every address a client might connect to for one literal host.
+
+    - A trailing root dot (``localhost.``) resolves identically, so strip it.
+    - Legacy numeric IPv4 forms - decimal ``2130706433``, hex ``0x7f000001``,
+      octal ``0177.0.0.1``, short ``127.1`` - are rejected by :mod:`ipaddress`
+      but accepted by libc's ``inet_aton``, which many HTTP clients use. A guard
+      that only understands dotted-quad treats them as hostnames and lets
+      ``http://2130706433/`` (loopback) straight through. Include the address
+      ``inet_aton`` yields alongside the literal, so both get checked.
+    """
+    h = host.strip().lower().rstrip(".")
+    if not h:
+        return []
+    out = [h]
+    if _as_ip(h) is None and re.fullmatch(r"[0-9a-fx.]+", h):
+        try:
+            out.append(socket.inet_ntoa(socket.inet_aton(h)))
+        except OSError:
+            pass
+    return out
+
+
+def _candidate_hosts(value: str) -> list[str]:
+    """All hosts a real client might connect to for a URL or bare host string.
+
+    Parsers disagree, and every recent egress-guard CVE of this class came from
+    the validator reading a URL differently from the client that fetched it.
+    RFC 3986 treats ``\\`` as an ordinary character, so
+    ``http://evil.com\\@good.com/`` is host ``good.com``; WHATWG (browsers,
+    Node, many agent runtimes) treats it as ``/``, giving host ``evil.com``.
+    Rather than bet on one parser, return every interpretation - callers must
+    reject the value if ANY of them is disallowed.
+    """
+    v = value.strip()
+    if not v:
+        return []
+    views = [v]
+    if "\\" in v:
+        views.append(v.replace("\\", "/"))
+    hosts: list[str] = []
+    for view in views:
+        literal = _extract_host(view)
+        if not literal:
+            continue
+        for candidate in _canonical_hosts(literal):
+            if candidate not in hosts:
+                hosts.append(candidate)
+    return hosts
+
+
 def _is_private_host(host: str) -> bool:
     """True for localhost or a private/loopback/link-local/reserved IP literal."""
-    if host == "localhost":
+    host = host.lower().rstrip(".")
+    # RFC 6761: ``localhost`` and every ``*.localhost`` name are loopback.
+    if host == "localhost" or host.endswith(".localhost"):
         return True
     ip = _as_ip(host)
     if ip is None:

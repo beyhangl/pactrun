@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pactrun.core.enums import EventKind
 from pactrun.core.models import Event, PredicateResult, SessionState
-from pactrun.predicates._neturl import _extract_host, _host_matches, _is_private_host, _url_like
+from pactrun.predicates._neturl import _candidate_hosts, _host_matches, _is_private_host, _url_like
 from pactrun.predicates.base import predicate
 
 
@@ -61,10 +61,13 @@ def tool_host_within(
                 continue
             if keys is None and not _url_like(value):
                 continue
-            host = _extract_host(value)
-            if host is None:
+            # Check every host a client might actually connect to (legacy
+            # numeric IPv4 forms, RFC-3986 vs WHATWG backslash handling); the
+            # value is blocked if ANY interpretation is disallowed.
+            hosts = _candidate_hosts(value)
+            if not hosts:
                 continue
-            reason = _evaluate(host)
+            reason = next((r for r in map(_evaluate, hosts) if r), None)
             if reason:
                 return PredicateResult(
                     passed=False,

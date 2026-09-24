@@ -60,6 +60,9 @@ class Contract:
     fallback_fn: Callable | None = None
     escalation_handler: Callable | None = None
     approval_handler: Callable | None = None
+    # "enforce" runs recovery actions; "monitor" records what WOULD have
+    # happened (Violation.enforced=False) without acting. Sessions inherit it.
+    mode: str = "enforce"
 
     # -- Fluent builder API ------------------------------------------------
 
@@ -189,6 +192,16 @@ class Contract:
     def on_escalate(self, handler: Callable) -> Contract:
         """Register a handler invoked when an `escalate`-action clause is violated."""
         self.escalation_handler = handler
+        return self
+
+    def monitor(self) -> Contract:
+        """Evaluate every clause but take no recovery action (shadow mode).
+
+        Use it to roll a contract out against live traffic and see exactly what
+        it would block before switching it to enforcement. Violations are still
+        recorded - with ``enforced=False`` - so ``is_compliant`` stays honest.
+        """
+        self.mode = "monitor"
         return self
 
     def on_approve(self, handler: Callable) -> Contract:

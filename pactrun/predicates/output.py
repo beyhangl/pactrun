@@ -458,7 +458,7 @@ def no_exfil_links(
 
     Relative paths, anchors, ``mailto:``/``tel:``/``data:`` are ignored.
     """
-    from pactrun.predicates._neturl import _extract_host, _host_matches, _is_private_host
+    from pactrun.predicates._neturl import _candidate_hosts, _host_matches, _is_private_host
 
     forms = tuple(forms)
     bad = set(forms) - _VALID_EXFIL_FORMS
@@ -471,18 +471,20 @@ def no_exfil_links(
             return None
         if low.startswith("/") and not low.startswith("//"):
             return None  # absolute same-origin path, no host
-        host = _extract_host(url)
-        if host is None:
+        hosts = _candidate_hosts(url)
+        if not hosts:
             return None
-        if deny_hosts and _host_matches(host, deny_hosts):
-            return f"host '{host}' is on the deny list"
-        if block_private and _is_private_host(host):
-            return f"host '{host}' is private/loopback"
-        if is_image and block_images:
-            if not allow_hosts or not _host_matches(host, allow_hosts):
-                return f"image points to non-allowlisted host '{host}' (zero-click exfil)"
-        elif allow_hosts is not None and not _host_matches(host, allow_hosts):
-            return f"host '{host}' is not in the allow list"
+        # Every interpretation a renderer/client might use must be allowed.
+        for host in hosts:
+            if deny_hosts and _host_matches(host, deny_hosts):
+                return f"host '{host}' is on the deny list"
+            if block_private and _is_private_host(host):
+                return f"host '{host}' is private/loopback"
+            if is_image and block_images:
+                if not allow_hosts or not _host_matches(host, allow_hosts):
+                    return f"image points to non-allowlisted host '{host}' (zero-click exfil)"
+            elif allow_hosts is not None and not _host_matches(host, allow_hosts):
+                return f"host '{host}' is not in the allow list"
         if flag_encoded_query and _has_encoded_query(url, leak_param_names):
             return "URL query carries an encoded payload"
         return None

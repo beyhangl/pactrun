@@ -15,10 +15,17 @@ Usage::
 from __future__ import annotations
 
 import contextvars
+import logging
 import time
 import uuid
 from typing import Any
 
+from pactrun.core.amounts import (
+    AMOUNT_FIELDS,
+    INVALID_AMOUNT_EVENTS_KEY,
+    INVALID_AMOUNTS_KEY,
+    is_valid_amount,
+)
 from pactrun.core.enums import EventKind, Severity
 from pactrun.core.models import (
     Clause,
@@ -31,6 +38,8 @@ from pactrun.core.models import (
 from pactrun.recovery.engine import apply_recovery
 
 # Context variable for the active session
+logger = logging.getLogger("pactrun")
+
 _active_session: contextvars.ContextVar[Session | None] = contextvars.ContextVar(
     "pactrun_session", default=None
 )
@@ -72,6 +81,11 @@ class Session:
         # Optional observers (e.g. the OTel span emitter) — pure consumers of
         # events and violations. No-op when none are registered.
         self._observers = list(kwargs.get("observers") or [])
+        # "enforce" (default) runs recovery actions; "monitor" evaluates every
+        # clause and records what WOULD have happened without acting on it.
+        self._mode = kwargs.get("mode") or getattr(contract, "mode", None) or "enforce"
+        if self._mode not in ("enforce", "monitor"):
+            raise ValueError(f"Session mode must be 'enforce' or 'monitor', got {self._mode!r}")
 
     # -- Properties --------------------------------------------------------
 
@@ -136,7 +150,7 @@ class Session:
         # Check preconditions
         dummy_event = Event(kind=EventKind.INPUT)
         for clause in self._contract.get_clauses(check_on="session_start"):
-            result = clause.evaluate(dummy_event, self._state)
+            result = self._evaluate(clause, dummy_event)
             if not result.passed:
                 self._record_violation(clause, dummy_event, result)
 
@@ -148,7 +162,7 @@ class Session:
         # Check postconditions and session-end clauses
         dummy_event = Event(kind=EventKind.OUTPUT)
         for clause in self._contract.get_clauses(check_on="session_end"):
-            result = clause.evaluate(dummy_event, self._state)
+            result = self._evaluate(clause, dummy_event)
             if not result.passed:
                 self._record_violation(clause, dummy_event, result)
 
@@ -232,6 +246,11 @@ class Session:
 
         This is the heart of the enforcement engine.
         """
+        # Reject amounts that would corrupt budget arithmetic BEFORE anything
+        # reads them, so totals, windowed rates, drift, telemetry and audit all
+        # see the same sane value.
+        self._sanitize_amounts(event)
+
         # Update cumulative state
         self._update_state(event)
         self._state.events.append(event)
@@ -243,7 +262,7 @@ class Session:
         violations: list[Violation] = []
         try:
             for clause in self._contract.get_clauses(check_on="every_event"):
-                result = clause.evaluate(event, self._state)
+                result = self._evaluate(clause, event)
                 if not result.passed:
                     v = self._record_violation(clause, event, result)
                     violations.append(v)
@@ -256,6 +275,52 @@ class Session:
         return violations
 
     # -- Internal ----------------------------------------------------------
+
+    def _evaluate(self, clause: Clause, event: Event) -> PredicateResult:
+        """Evaluate a clause; a predicate that raises counts as FAILING.
+
+        A check that cannot run has not passed. The failure is routed through
+        the clause's own ``on_fail`` like any other violation - so a default
+        ``block`` clause halts the run in a controlled, audited way instead of
+        an exception escaping mid-evaluation and skipping the remaining clauses.
+        Set ``on_fail="log"`` on a clause to make a broken check fail open.
+        """
+        try:
+            return clause.evaluate(event, self._state)
+        except Exception as exc:  # noqa: BLE001 - any predicate error is a failed check
+            name = clause.predicate_name or clause.description
+            logger.exception("pactrun: predicate %r raised; treating the clause as failing", name)
+            return PredicateResult(
+                passed=False,
+                expected=f"predicate {name!r} to evaluate",
+                actual=f"{type(exc).__name__}: {exc}",
+                message=f"Predicate {name!r} raised {type(exc).__name__} — treated as failing (fail-closed)",
+            )
+
+    def _sanitize_amounts(self, event: Event) -> None:
+        """Zero out negative / non-finite amounts and record what was rejected.
+
+        ``None`` is treated as "not reported" (0) rather than invalid, matching
+        the field defaults. Anything else that is not a finite, non-negative
+        number is replaced with 0 so it can never lower a running total, and the
+        raw value is kept (as a string, so audit JSON stays valid) under
+        ``event.metadata[INVALID_AMOUNTS_KEY]`` for the budget predicates.
+        """
+        rejected: dict[str, str] = {}
+        for field in AMOUNT_FIELDS:
+            value = getattr(event, field, 0)
+            if value is None:
+                setattr(event, field, 0)
+            elif not is_valid_amount(value):
+                rejected[field] = repr(value)
+                setattr(event, field, 0)
+        if not rejected:
+            return
+        event.metadata = dict(event.metadata or {})
+        event.metadata[INVALID_AMOUNTS_KEY] = rejected
+        count = self._state.metadata.get(INVALID_AMOUNT_EVENTS_KEY, 0) + 1
+        self._state.metadata[INVALID_AMOUNT_EVENTS_KEY] = count
+        logger.warning("pactrun: rejected invalid amount(s) on event %s: %s", event.id, rejected)
 
     def _update_state(self, event: Event) -> None:
         """Update cumulative session state from an event."""
@@ -302,6 +367,7 @@ class Session:
             expected=result.expected,
             actual=result.actual,
             context_snapshot=self._state.to_dict(),
+            enforced=self._mode == "enforce",
         )
         self._violations.append(violation)
 
@@ -309,6 +375,14 @@ class Session:
             notify = getattr(observer, "on_violation", None)
             if notify is not None:
                 notify(violation, event)
+
+        if self._mode == "monitor":
+            # Report what would have happened; never present it as enforcement.
+            logger.info(
+                "pactrun [monitor]: would have applied %r: %s",
+                violation.on_fail.value, violation.message,
+            )
+            return violation
 
         # Route to the recovery action (log / warn / block / escalate / retry /
         # fallback). Halting and control-flow actions raise; log/warn return.

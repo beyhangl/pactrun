@@ -193,6 +193,9 @@ class Violation:
     expected: Any = None
     actual: Any = None
     context_snapshot: dict = field(default_factory=dict)
+    # False when recorded in monitor mode: the violation was detected but no
+    # recovery action ran. Never present an unenforced result as enforcement.
+    enforced: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -208,6 +211,7 @@ class Violation:
             "message": self.message,
             "expected": self.expected,
             "actual": self.actual,
+            "enforced": self.enforced,
         }
 
     @classmethod
@@ -225,6 +229,7 @@ class Violation:
             message=data.get("message", ""),
             expected=data.get("expected"),
             actual=data.get("actual"),
+            enforced=data.get("enforced", True),
         )
 
 

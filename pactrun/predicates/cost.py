@@ -2,14 +2,34 @@
 
 from __future__ import annotations
 
+from pactrun.core.amounts import invalid_amounts, require_limit
 from pactrun.core.models import Event, PredicateResult, SessionState
 from pactrun.predicates.base import predicate
+
+
+def _reject_invalid(event: Event, *fields: str) -> PredicateResult | None:
+    """Fail closed on an event whose amount the session had to reject."""
+    bad = invalid_amounts(event, *fields)
+    if not bad:
+        return None
+    detail = ", ".join(f"{k}={v}" for k, v in bad.items())
+    return PredicateResult(
+        passed=False,
+        expected="finite, non-negative amounts",
+        actual=detail,
+        message=f"Event reported an invalid amount ({detail}); refusing rather than trusting the budget",
+    )
 
 
 @predicate("cost_under", owasp=("ASI08",))
 def cost_under(max_usd: float):
     """Session total cost must stay under budget."""
+    require_limit("cost_under(max_usd)", max_usd)
+
     def check(event: Event, state: SessionState) -> PredicateResult:
+        rejected = _reject_invalid(event, "cost_usd")
+        if rejected:
+            return rejected
         return PredicateResult(
             passed=state.total_cost_usd <= max_usd,
             expected=f"<= ${max_usd:.4f}",
@@ -23,7 +43,12 @@ def cost_under(max_usd: float):
 @predicate("cost_per_turn_under", owasp=("ASI08",))
 def cost_per_turn_under(max_usd: float):
     """Per-turn cost must stay under limit."""
+    require_limit("cost_per_turn_under(max_usd)", max_usd)
+
     def check(event: Event, state: SessionState) -> PredicateResult:
+        rejected = _reject_invalid(event, "cost_usd")
+        if rejected:
+            return rejected
         if not state.cost_per_turn:
             return PredicateResult(passed=True)
         last_cost = state.cost_per_turn[-1]
@@ -40,7 +65,12 @@ def cost_per_turn_under(max_usd: float):
 @predicate("token_budget", owasp=("ASI08",))
 def token_budget(max_tokens: int):
     """Session total tokens must stay under budget."""
+    require_limit("token_budget(max_tokens)", max_tokens)
+
     def check(event: Event, state: SessionState) -> PredicateResult:
+        rejected = _reject_invalid(event, "prompt_tokens", "completion_tokens")
+        if rejected:
+            return rejected
         return PredicateResult(
             passed=state.total_tokens <= max_tokens,
             expected=f"<= {max_tokens} tokens",

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
+from pactrun.core.amounts import invalid_amounts, require_limit
 from pactrun.core.enums import EventKind
 from pactrun.core.models import Event, PredicateResult, SessionState
 from pactrun.predicates._argpath import _resolve_path
@@ -36,7 +37,17 @@ def _scalar_key(value) -> str:
 @predicate("spend_rate_under", owasp=("ASI08",))
 def spend_rate_under(max_usd: float, window_s: float):
     """LLM spend within a rolling time window must stay under a cap."""
+    require_limit("spend_rate_under(max_usd)", max_usd)
+    require_limit("spend_rate_under(window_s)", window_s, allow_zero=False)
+
     def check(event: Event, state: SessionState) -> PredicateResult:
+        if invalid_amounts(event, "cost_usd"):
+            return PredicateResult(
+                passed=False,
+                expected="finite, non-negative cost",
+                actual=str(invalid_amounts(event, "cost_usd")),
+                message="Event reported an invalid cost; refusing rather than trusting the spend window",
+            )
         spent = sum(e.cost_usd for e in _window_events(state, event, window_s, EventKind.LLM_CALL))
         return PredicateResult(
             passed=spent <= max_usd,
