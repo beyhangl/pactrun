@@ -61,7 +61,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **637 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **681 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
@@ -70,6 +70,8 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 | Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
 | 53 built-in predicates (cost, **supply-chain**, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
+| **Monitor (shadow) mode** — evaluate everything, record what *would* be blocked, enforce nothing | |
+| **Explicit failure posture** — a predicate that errors, or an invalid cost, fails closed ([docs/LIMITATIONS.md](docs/LIMITATIONS.md)) | |
 | **OWASP Agentic Top-10 (2026) mapping** — runtime controls for 9 of 10 risks, `pactrun predicates --owasp` | |
 | **Prompt-injection & exfiltration defense** — hidden-text scan, output link/image exfil guard, untrusted→exfil chain, taint-to-sink, injection-phrase & canary-leak tripwires | |
 | **Argument-level tool guards** — JSON-Schema match, destructive-command block, path-sandbox, **per-field value allow/deny**, **required disclosure** | |
@@ -224,7 +226,7 @@ Experimental — tracks the OpenTelemetry GenAI semantic conventions (Developmen
 
 ### Tamper-evident audit log
 
-For a durable record-keeping trail (rather than ephemeral spans), attach an `AuditLogObserver`. It writes an append-only, hash-chained JSONL ledger — one record per event and violation — that `verify_audit_log()` can later prove was not altered, deleted, or reordered. A `secret` upgrades the chain to HMAC; sensitive arg keys are redacted and outputs hashed by default.
+For a durable record-keeping trail (rather than ephemeral spans), attach an `AuditLogObserver`. It writes an append-only, hash-chained JSONL ledger — one record per event and violation — that `verify_audit_log()` can later prove was not altered, deleted, or reordered. Sensitive arg keys are redacted and outputs hashed by default. **Pass a `secret`**: without one the chain is plain SHA-256, which catches an edited, deleted, or reordered record but not someone who rewrites the whole file and recomputes every hash — only HMAC mode resists that (see [docs/LIMITATIONS.md](docs/LIMITATIONS.md)).
 
 ```python
 from pactrun.observability import AuditLogObserver, verify_audit_log
@@ -325,6 +327,24 @@ contract = Contract("agent").require(cost_under(0.05), on_fail="escalate").on_es
 ```
 
 `retry` and `fallback` are control-flow actions handled by `@contract.enforce` (which owns the call); outside the decorator they surface as `RetrySignal` / `FallbackSignal` for you to handle. See [`examples/recovery.py`](examples/recovery.py).
+
+---
+
+### Rolling out safely: monitor mode
+
+Turning a new contract straight on in production is risky — you don't yet know what it will block. Run it in **monitor mode** first: every clause is evaluated and every violation is recorded, but no recovery action runs.
+
+```python
+contract = Contract("agent").require(cost_under(0.50)).forbid(must_not_call("delete")).monitor()
+
+with contract.session() as s:
+    ...  # nothing is blocked
+
+for v in s.violations:
+    print(v.message, v.enforced)   # enforced=False: this is what enforcement WOULD have done
+```
+
+When the violations look right, drop `.monitor()`. You can also switch a single session with `contract.session(mode="monitor")`.
 
 ---
 
@@ -562,16 +582,22 @@ They share design patterns (`contextvars`-based session tracking, the same depen
 
 ---
 
+## Security
+
+pactrun is a guardrail, so a bypass or a check that fails open is treated as a security issue. **Report it privately** — see [SECURITY.md](SECURITY.md). Before relying on pactrun for a security property, read [docs/LIMITATIONS.md](docs/LIMITATIONS.md): it states exactly what happens when a check errors or receives invalid input, and what pactrun cannot see. Changes are tracked in [CHANGELOG.md](CHANGELOG.md), and [docs/VERSION_POLICY.md](docs/VERSION_POLICY.md) explains what a version bump promises.
+
+---
+
 ## Contributing
 
 ```bash
 git clone https://github.com/beyhangl/pactrun
-cd agentpact
+cd pactrun
 pip install -e ".[dev]"
-pytest        # 637 tests
+pytest        # 681 tests
 ```
 
-PRs welcome — please open an issue first for significant changes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) — in particular, every security fix needs a test that **fails** without the fix. Please open an issue first for significant changes.
 
 ---
 

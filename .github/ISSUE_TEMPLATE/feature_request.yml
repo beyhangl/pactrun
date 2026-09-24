@@ -1,0 +1,20 @@
+name: Feature request
+description: A new predicate, adapter, or capability.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What behavior do you need to enforce or observe?
+      description: Describe the agent behavior, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+  - type: input
+    id: owasp
+    attributes:
+      label: Related OWASP Agentic risk (optional)
+      placeholder: e.g. ASI02 Tool Misuse & Exploitation
