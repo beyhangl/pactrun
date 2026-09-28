@@ -85,6 +85,14 @@ from pactrun.recovery import (
     digest,
     webhook_handler,
 )
+from pactrun.replay import (
+    PolicyTestReport,
+    ReplayResult,
+    TraceLoadError,
+    load_trace,
+    replay_trace,
+    run_contract_tests,
+)
 from pactrun.session import Session, get_active_session
 from pactrun.wrap import wrap
 
@@ -96,6 +104,8 @@ __all__ = [
     "Clause", "Event", "PredicateResult", "SessionState", "SessionSummary", "Violation",
     "Contract", "Session", "get_active_session", "wrap",
     "predicate", "get_predicate", "list_predicates",
+    "load_trace", "replay_trace", "run_contract_tests",
+    "ReplayResult", "PolicyTestReport", "TraceLoadError",
     # Built-in predicates
     "cost_under", "cost_per_turn_under", "token_budget",
     "must_call", "must_not_call", "tool_order", "tools_allowed", "max_tool_calls",

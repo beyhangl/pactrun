@@ -183,6 +183,9 @@ class Violation:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     clause_id: str = ""
     clause_description: str = ""
+    # Registry name of the predicate that failed (e.g. "cost_under"). Stable,
+    # unlike the message text - match on this in tests and reports.
+    predicate_name: str = ""
     kind: ClauseKind = ClauseKind.REQUIRE
     severity: Severity = Severity.ERROR
     on_fail: OnFail = OnFail.BLOCK
@@ -202,6 +205,7 @@ class Violation:
             "id": self.id,
             "clause_id": self.clause_id,
             "clause_description": self.clause_description,
+            "predicate_name": self.predicate_name,
             "kind": self.kind.value,
             "severity": self.severity.value,
             "on_fail": self.on_fail.value,
@@ -220,6 +224,7 @@ class Violation:
             id=data.get("id", str(uuid.uuid4())),
             clause_id=data.get("clause_id", ""),
             clause_description=data.get("clause_description", ""),
+            predicate_name=data.get("predicate_name", ""),
             kind=ClauseKind(data.get("kind", "require")),
             severity=Severity(data.get("severity", "error")),
             on_fail=OnFail(data.get("on_fail", "block")),

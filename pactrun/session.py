@@ -86,6 +86,13 @@ class Session:
         self._mode = kwargs.get("mode") or getattr(contract, "mode", None) or "enforce"
         if self._mode not in ("enforce", "monitor"):
             raise ValueError(f"Session mode must be 'enforce' or 'monitor', got {self._mode!r}")
+        # "wall" measures elapsed time with the real clock. "event" measures it
+        # from the events' own timestamps, so replaying a recorded trace judges
+        # session_timeout by how long the ORIGINAL run took, not the replay.
+        self._clock = kwargs.get("clock", "wall")
+        if self._clock not in ("wall", "event"):
+            raise ValueError(f"Session clock must be 'wall' or 'event', got {self._clock!r}")
+        self._first_event_ts: float | None = None
 
     # -- Properties --------------------------------------------------------
 
@@ -157,7 +164,12 @@ class Session:
     def _end(self) -> None:
         """End the session. Evaluates postconditions."""
         self._ended_at = time.time()
-        self._state.elapsed_ms = (self._ended_at - self._started_at) * 1000
+        if self._clock == "event":
+            last = self._state.events[-1].timestamp if self._state.events else None
+            if last is not None and self._first_event_ts is not None:
+                self._state.elapsed_ms = (last - self._first_event_ts) * 1000
+        else:
+            self._state.elapsed_ms = (self._ended_at - self._started_at) * 1000
 
         # Check postconditions and session-end clauses
         dummy_event = Event(kind=EventKind.OUTPUT)
@@ -344,7 +356,11 @@ class Session:
                 self._state.output_history.append(str(event.output))
 
         # Update elapsed time
-        if self._started_at:
+        if self._clock == "event":
+            if self._first_event_ts is None:
+                self._first_event_ts = event.timestamp
+            self._state.elapsed_ms = max(0.0, (event.timestamp - self._first_event_ts) * 1000)
+        elif self._started_at:
             self._state.elapsed_ms = (time.time() - self._started_at) * 1000
 
     def _record_violation(
@@ -357,6 +373,7 @@ class Session:
         violation = Violation(
             clause_id=clause.id,
             clause_description=clause.description,
+            predicate_name=clause.predicate_name,
             kind=clause.kind,
             severity=clause.severity,
             on_fail=clause.on_fail,

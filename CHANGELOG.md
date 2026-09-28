@@ -31,6 +31,19 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Added
 
+- Trace replay: `TraceRecorder` writes every session event to a JSONL file
+  (credential-looking arguments redacted), and `Contract.replay()` /
+  `replay_trace()` / `pactrun replay CONTRACT TRACE` evaluate a recorded run
+  against any contract without enforcing. Replays run on the event clock, so
+  `session_timeout` judges how long the original run took.
+- Policy tests: a contract's `tests:` block pins the exact set of predicates
+  each trace (or inline event list) should trip; `pactrun test` and
+  `run_contract_tests()` fail on missed detections and on over-blocking.
+- `Violation.predicate_name`, so violations name the predicate that fired even
+  when a clause has a custom description.
+- `session(clock="event")` measures elapsed time from event timestamps instead
+  of the wall clock.
+- A top-level `mode: monitor` in YAML contracts.
 - Monitor (shadow) mode: `Contract(...).monitor()` or `session(mode="monitor")`
   evaluates every clause and records violations with `enforced=False` without
   running recovery actions.
@@ -71,6 +84,9 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Fixed
 
+- `pactrun validate` crashed with a traceback on a clause with bad arguments
+  (an unknown argument name, or a NaN/infinite/negative limit). It now reports
+  the clause as invalid and exits 1.
 - The EU AI Act framing in the audit log docs overstated what Art. 12
   requires; it now describes the log as a control that supports
   record-keeping, not compliance.

@@ -4,6 +4,8 @@
     pactrun validate    load and validate contract YAML file(s)
     pactrun show        pretty-print a contract's clauses
     pactrun predicates  list the built-in predicates
+    pactrun replay      replay a recorded JSONL trace against a contract
+    pactrun test        run the policy tests in a contract's tests: block
 """
 
 from __future__ import annotations
@@ -164,6 +166,93 @@ def predicates(owasp: bool = False) -> None:
         ids = predicate_owasp(name)
         suffix = f"  [dim]{' '.join(ids)}[/dim]" if ids else ""
         console.print(f"  • {name}{suffix}")
+
+
+@cli.command()
+@click.argument("contract_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("trace_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Print the result as JSON.")
+def replay(contract_path: Path, trace_path: Path, as_json: bool) -> None:
+    """Replay a recorded TRACE (JSONL) against a CONTRACT without enforcing.
+
+    Exit code 0 if the run complies, 1 if the contract would have flagged it,
+    2 if the contract or trace could not be loaded - so it can gate CI.
+    """
+    import json as _json
+
+    from pactrun.replay import TraceLoadError, load_trace, replay_trace
+
+    try:
+        contract = Contract.from_yaml(contract_path)
+        events = load_trace(trace_path)
+    except (ContractLoadError, TraceLoadError) as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise SystemExit(2) from exc
+
+    result = replay_trace(contract, events)
+
+    if as_json:
+        click.echo(_json.dumps({
+            "contract": result.contract_name,
+            "events": len(result.events),
+            "compliant": result.compliant,
+            "violated": result.violated,
+            "violations": [
+                {**v.to_dict(), "event_index": result.event_index(v)} for v in result.violations
+            ],
+        }, indent=2, default=str))
+    elif result.compliant:
+        console.print(
+            f"[green]✓ '{result.contract_name}': {len(result.events)} event(s), no violations.[/green]"
+        )
+    else:
+        table = Table(title=f"'{result.contract_name}' would flag {len(result.violations)} violation(s)")
+        table.add_column("event")
+        table.add_column("predicate")
+        table.add_column("would do")
+        table.add_column("message")
+        for v in result.violations:
+            idx = result.event_index(v)
+            table.add_row(
+                str(idx) if idx is not None else "end",
+                v.predicate_name or v.clause_description,
+                v.on_fail.value,
+                v.message,
+            )
+        console.print(table)
+
+    raise SystemExit(0 if result.compliant else 1)
+
+
+@cli.command(name="test")
+@click.argument("contract_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def test_cmd(contract_path: Path) -> None:
+    """Run the policy tests in a CONTRACT file's `tests:` block.
+
+    Exit code 0 if every test passes, 1 if any fails, 2 if the contract, its
+    tests, or a referenced trace could not be loaded.
+    """
+    from pactrun.replay import TraceLoadError, run_contract_tests
+
+    try:
+        report = run_contract_tests(contract_path)
+    except (ContractLoadError, TraceLoadError) as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise SystemExit(2) from exc
+
+    for r in report.results:
+        want = "pass" if not r.expected else f"violated {r.expected}"
+        if r.passed:
+            console.print(f"[green]✓[/green] {r.name} [dim]({want})[/dim]")
+        else:
+            console.print(f"[red]✗ {r.name}[/red] — expected {want}; {r.detail}")
+
+    failed = sum(not r.passed for r in report.results)
+    total = len(report.results)
+    if failed:
+        console.print(f"\n[red]{failed} of {total} policy test(s) failed.[/red]")
+        raise SystemExit(1)
+    console.print(f"\n[green]All {total} policy test(s) passed.[/green]")
 
 
 if __name__ == "__main__":

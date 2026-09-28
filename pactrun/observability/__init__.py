@@ -6,6 +6,10 @@ def __getattr__(name):
         from pactrun.observability import otel
 
         return getattr(otel, name)
+    if name == "TraceRecorder":
+        from pactrun.observability import trace
+
+        return trace.TraceRecorder
     if name in ("AuditLogObserver", "verify_audit_log", "AuditReport"):
         from pactrun.observability import audit
 

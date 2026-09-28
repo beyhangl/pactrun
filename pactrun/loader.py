@@ -44,6 +44,9 @@ def load_contract_dict(data: dict) -> Contract:
     description = data.get("description", "")
     default_on_fail = OnFail(data.get("default_on_fail", data.get("on_fail", "block")))
     metadata = data.get("metadata", {})
+    mode = data.get("mode", "enforce")
+    if mode not in ("enforce", "monitor"):
+        raise ContractLoadError(f"Contract mode must be 'enforce' or 'monitor', got {mode!r}")
 
     contract = Contract(
         name=name,
@@ -51,6 +54,7 @@ def load_contract_dict(data: dict) -> Contract:
         description=description,
         default_on_fail=default_on_fail,
         metadata=metadata,
+        mode=mode,
     )
 
     # Parse clauses
@@ -92,12 +96,17 @@ def _parse_clause(data: dict, default_on_fail: OnFail) -> Clause:
 
     # Build predicate with args
     args = data.get("args", {})
-    if isinstance(args, dict):
-        predicate_fn = predicate_factory(**args)
-    elif isinstance(args, list):
-        predicate_fn = predicate_factory(*args)
-    else:
-        predicate_fn = predicate_factory(args)
+    try:
+        if isinstance(args, dict):
+            predicate_fn = predicate_factory(**args)
+        elif isinstance(args, list):
+            predicate_fn = predicate_factory(*args)
+        else:
+            predicate_fn = predicate_factory(args)
+    except (TypeError, ValueError) as e:
+        # A bad argument (wrong name, or a limit that is NaN/inf/negative) is a
+        # contract error - report it as one, not as a traceback.
+        raise ContractLoadError(f"Clause {pred_name!r}: invalid args {args!r}: {e}") from e
 
     severity = Severity(data.get("severity", "critical" if kind == ClauseKind.FORBID else "error"))
     on_fail = OnFail(data.get("on_fail", default_on_fail.value))

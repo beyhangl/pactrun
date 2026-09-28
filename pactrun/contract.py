@@ -28,6 +28,7 @@ from pactrun.core.enums import ClauseKind, OnFail, Severity
 from pactrun.core.models import Clause, Event, PredicateResult, SessionState
 
 if TYPE_CHECKING:  # imported lazily at call time to avoid a circular import
+    from pactrun.replay import ReplayResult
     from pactrun.session import Session
 
 
@@ -193,6 +194,16 @@ class Contract:
         """Register a handler invoked when an `escalate`-action clause is violated."""
         self.escalation_handler = handler
         return self
+
+    def replay(self, events: list[Event]) -> ReplayResult:
+        """Evaluate recorded ``events`` against this contract without enforcing.
+
+        Runs in monitor mode on the event clock and returns a
+        :class:`~pactrun.replay.ReplayResult`. See :mod:`pactrun.replay`.
+        """
+        from pactrun.replay import replay_trace
+
+        return replay_trace(self, events)
 
     def monitor(self) -> Contract:
         """Evaluate every clause but take no recovery action (shadow mode).

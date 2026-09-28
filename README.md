@@ -61,7 +61,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **681 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **713 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
@@ -71,6 +71,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 | 53 built-in predicates (cost, **supply-chain**, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
 | **Monitor (shadow) mode** — evaluate everything, record what *would* be blocked, enforce nothing | |
+| **Trace replay + policy tests** — record a run to JSONL, replay it against any contract, and pin expected verdicts in CI (`pactrun replay` / `pactrun test`) | |
 | **Explicit failure posture** — a predicate that errors, or an invalid cost, fails closed ([docs/LIMITATIONS.md](docs/LIMITATIONS.md)) | |
 | **OWASP Agentic Top-10 (2026) mapping** — runtime controls for 9 of 10 risks, `pactrun predicates --owasp` | |
 | **Prompt-injection & exfiltration defense** — hidden-text scan, output link/image exfil guard, untrusted→exfil chain, taint-to-sink, injection-phrase & canary-leak tripwires | |
@@ -86,7 +87,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 | Drift detection (Page-Hinkley + EWMA) | |
 | OpenAI + Anthropic + Gemini + LangChain/LangGraph + LiteLLM/CrewAI + **MCP** adapters | |
 | `@contract.enforce` decorator | |
-| CLI (`init` / `validate` / `show` / `predicates`) | |
+| CLI (`init` / `validate` / `show` / `predicates` / `replay` / `test`) | |
 | pytest plugin (`@pytest.mark.contracted`) | |
 | **OpenTelemetry GenAI** span emitter (experimental) | |
 
@@ -344,7 +345,60 @@ for v in s.violations:
     print(v.message, v.enforced)   # enforced=False: this is what enforcement WOULD have done
 ```
 
-When the violations look right, drop `.monitor()`. You can also switch a single session with `contract.session(mode="monitor")`.
+When the violations look right, drop `.monitor()`. You can also switch a single session with `contract.session(mode="monitor")`, or set `mode: monitor` at the top of a YAML contract.
+
+### Replaying recorded runs
+
+Monitor mode shows what a contract does to *future* traffic. Replay answers the other question: what would this contract have done to runs you already have? Record a run with `TraceRecorder`, then replay the file against any contract, including one you are still writing.
+
+```python
+from pactrun import Contract, load_trace
+from pactrun.observability import TraceRecorder
+
+with contract.session(observers=[TraceRecorder("runs/2026-09-28.jsonl")]) as s:
+    ...  # the agent runs as usual; each event is written as one JSON line
+
+candidate = Contract.from_yaml("contracts/stricter.yaml")
+result = candidate.replay(load_trace("runs/2026-09-28.jsonl"))
+print(result.compliant, result.violated)   # False ['no_exfiltration_after_untrusted']
+```
+
+Replay never raises and never runs recovery, even for `block` clauses. It judges time limits on the clock the events were recorded with, so a run that took ten minutes still breaks a 60-second `session_timeout` when it replays in a millisecond. `TraceRecorder` redacts credential-looking argument names (`api_key`, `password`, `token`, ...) before writing. The trace still holds prompts and outputs, so store it like any other log that may contain user data.
+
+```bash
+pactrun replay contracts/stricter.yaml runs/2026-09-28.jsonl    # exit 0 compliant, 1 flagged, 2 load error
+pactrun replay contracts/stricter.yaml runs/2026-09-28.jsonl --json
+```
+
+### Policy tests
+
+A contract can carry its own tests. Each one is a recorded trace or a few inline events, plus the exact set of predicates you expect to fire. `pactrun test` fails when a clause stops catching what it should *and* when it starts flagging a run it should let through, so a loosened or over-tightened rule shows up in review instead of in production.
+
+```yaml
+# at the bottom of contracts/support_agent.yaml
+tests:
+  - name: normal support conversation passes
+    trace: traces/benign.jsonl            # relative to this file
+    expect: pass
+  - name: injected page steering an email out is caught
+    trace: traces/attack.jsonl
+    expect: { violated: [no_exfiltration_after_untrusted, no_injection_phrases] }
+  - name: a runaway bill is caught
+    events:
+      - { kind: llm_call, cost_usd: 0.90 }
+    expect: { violated: [cost_under] }
+```
+
+```text
+$ pactrun test contracts/support_agent.yaml
+✓ normal support conversation passes (pass)
+✓ injected page steering an email out is caught (violated ['no_exfiltration_after_untrusted', 'no_injection_phrases'])
+✓ a runaway bill is caught (violated ['cost_under'])
+
+All 3 policy test(s) passed.
+```
+
+Exit codes are 0 (all pass), 1 (a test failed) and 2 (the contract, its tests, or a trace could not be loaded), so both commands can gate a CI job.
 
 ---
 
@@ -468,7 +522,7 @@ from pactrun import Contract
 contract = Contract.from_yaml("contracts/support_agent.yaml")
 ```
 
-Each clause names a predicate (`require` / `forbid` / `precondition` / `postcondition`), its `args`, and optionally `severity`, `on_fail`, and `check_on`.
+Each clause names a predicate (`require` / `forbid` / `precondition` / `postcondition`), its `args`, and optionally `severity`, `on_fail`, and `check_on`. A top-level `mode: monitor` loads the contract in shadow mode, and an optional `tests:` block holds [policy tests](#policy-tests). A clause with bad arguments, such as an unknown name or a negative budget, is reported by `pactrun validate` as a contract error.
 
 ---
 
@@ -481,6 +535,8 @@ pactrun init --name support_agent      # scaffold contracts/support_agent.yaml
 pactrun validate contracts/            # validate one file or a whole directory
 pactrun show contracts/support_agent.yaml   # pretty-print a contract's clauses
 pactrun predicates                     # list the 53 built-in predicates
+pactrun replay contracts/support_agent.yaml run.jsonl   # what would this contract have flagged?
+pactrun test contracts/support_agent.yaml               # run the contract's policy tests
 ```
 
 ```text
@@ -594,7 +650,7 @@ pactrun is a guardrail, so a bypass or a check that fails open is treated as a s
 git clone https://github.com/beyhangl/pactrun
 cd pactrun
 pip install -e ".[dev]"
-pytest        # 681 tests
+pytest        # 713 tests
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) — in particular, every security fix needs a test that **fails** without the fix. Please open an issue first for significant changes.

@@ -66,3 +66,20 @@ re-checks offline.
 - It is a control that *supports* record-keeping. It is not, on its own,
   compliance with any regulation. See the audit module's docstring for the EU
   AI Act specifics.
+
+## What a replay does and does not tell you
+
+`pactrun replay` and `pactrun test` evaluate the events in a trace file, nothing
+more.
+
+- A replay can only judge what was recorded. A predicate that reads metadata
+  the original run never attached (a trust label, a tool definition, an
+  approval token) sees it as missing, exactly as it would have live.
+- Traces are plain JSONL with no integrity check. Anyone who can edit the file
+  can change the verdict. Keep traces you rely on as evidence next to an
+  HMAC audit log, not instead of one.
+- Replays run on the recorded timestamps. A trace written with a wrong clock
+  gives wrong `session_timeout` and rate-limit results.
+- `TraceRecorder` redacts argument names that look like credentials. It does
+  not redact prompts, model output, or tool results, which can hold personal
+  data.
