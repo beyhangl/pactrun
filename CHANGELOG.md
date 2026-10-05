@@ -12,6 +12,15 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Security
 
+- `no_injection_phrases(decode=("base64",))` missed an encoded payload whenever
+  text was glued to its front (`payload=...`, `id_...`, a URL query) or it used
+  the URL-safe alphabet. It now decodes at every alignment in both alphabets.
+- `no_exfil_links` missed three kinds of image a renderer loads automatically:
+  reference-style markdown images (`![x][1]` with `[1]: url`), images whose alt
+  text contains brackets, and `srcset` on `<img>` / `<source>`.
+- `no_exfiltration_after_untrusted` now also honours `metadata["untrusted"] =
+  True`, the label `untrusted_taint_to_sink` and `lethal_trifecta_guard` read.
+  A host that set only that label lost the label check here.
 - Budget predicates no longer fail open on invalid amounts. A negative cost or
   token count used to lower the running total, so one bad event could
   "refund" the budget ($54.90 of real spend passed a $5 `cost_under` with no
@@ -31,6 +40,10 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Added
 
+- Pydantic AI adapter: `PactrunCapability(contract)` plugs into
+  `Agent(capabilities=[...])`, records model responses and tool calls, and
+  stops a blocked tool before it runs. `on_tool_block="return_to_model"`
+  returns the refusal to the model instead. New extra: `pactrun[pydantic-ai]`.
 - Trace replay: `TraceRecorder` writes every session event to a JSONL file
   (credential-looking arguments redacted), and `Contract.replay()` /
   `replay_trace()` / `pactrun replay CONTRACT TRACE` evaluate a recorded run

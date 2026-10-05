@@ -40,6 +40,7 @@ gemini = ["google-genai>=1.0"]
 litellm = ["litellm>=1.0"]
 tiktoken = ["tiktoken>=0.9"]
 mcp = ["mcp>=1.10,<3"]
+pydantic-ai = ["pydantic-ai-slim>=1.71,<3"]
 otel = ["opentelemetry-api>=1.27", "opentelemetry-sdk>=1.27", "opentelemetry-semantic-conventions>=0.48b0"]
 jsonschema = ["jsonschema>=4.0"]
 webhook = ["httpx>=0.24"]
@@ -57,6 +58,7 @@ all = [
     "jsonschema>=4.0",
     "httpx>=0.24",
     "evalcraft>=0.1.0",
+    "pydantic-ai-slim>=1.71,<3",
 ]
 dev = [
     "pytest>=7.0",

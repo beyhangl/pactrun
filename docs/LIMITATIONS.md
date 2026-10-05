@@ -26,6 +26,16 @@ for a security property, read this first.
   package install script — never produces an event.
 - **Model internals.** pactrun judges inputs, outputs, and tool calls, not the
   model's reasoning.
+- **Tool results and trust labels, unless you record them.** The provider
+  adapters (OpenAI, Anthropic, Gemini, LiteLLM, LangChain, MCP) record a tool's
+  name and arguments, not what the tool returned or whether that content was
+  untrusted. Checks that read tool results or trust labels
+  (`no_injection_phrases` and `no_invisible_text` on tool results,
+  `untrusted_taint_to_sink`, and the label path of
+  `no_exfiltration_after_untrusted` and `lethal_trifecta_guard`) see nothing
+  until the host passes them in, for example with
+  `session.emit_tool_call(name, args=..., result=..., metadata={"untrusted": True})`.
+  `no_exfiltration_after_untrusted` still catches the sequence by tool name.
 
 ## Known limits of specific checks
 
@@ -41,6 +51,12 @@ for a security property, read this first.
   regexes, the destructive-argument denylist, and the invisible-text scanner can
   all be evaded by paraphrase, novel encodings, or content split across several
   tool calls. Treat any denylist as incomplete.
+- **`no_exfil_links` only reads constructs that load or link.** It extracts
+  markdown and HTML images and links (including reference-style images and
+  `srcset`). A bare URL in plain text, or data hidden in an allowed host's path,
+  is not flagged. `canary_not_leaked` reads the model output only, so a canary
+  sent out through a tool argument is not seen; pair it with `no_secrets` on
+  tool arguments or `untrusted_taint_to_sink`.
 - **The cost check in `wrap()` is a worst-case bound.** Completion tokens can't
   be known before a call, and reasoning models can exceed the estimate. The
   recorded cost after the call is the real one.

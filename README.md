@@ -61,13 +61,13 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **713 passing tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **734 tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
 | One-line `pactrun.wrap()` pre-call gate — real-tokenizer cost (tiktoken/litellm), **async + streaming** | EU AI Act / compliance document export |
 | Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
-| Session-level runtime enforcement (sync + async) | Pydantic-AI adapter; native CrewAI tool events |
+| Session-level runtime enforcement (sync + async) | Native CrewAI tool events |
 | 53 built-in predicates (cost, **supply-chain**, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
 | **Monitor (shadow) mode** — evaluate everything, record what *would* be blocked, enforce nothing | |
@@ -85,7 +85,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 | **Flow tracking** — ordered-stage drop-off diagnostics + out-of-order phase gate | |
 | **Escalation handlers** — built-in webhook (generic / chat) + **digest** (batched alerts) | |
 | Drift detection (Page-Hinkley + EWMA) | |
-| OpenAI + Anthropic + Gemini + LangChain/LangGraph + LiteLLM/CrewAI + **MCP** adapters | |
+| OpenAI + Anthropic + Gemini + LangChain/LangGraph + LiteLLM/CrewAI + **MCP** + **Pydantic AI** adapters | |
 | `@contract.enforce` decorator | |
 | CLI (`init` / `validate` / `show` / `predicates` / `replay` / `test`) | |
 | pytest plugin (`@pytest.mark.contracted`) | |
@@ -211,6 +211,22 @@ await guarded.call_tool("delete_file", {"path": "a.txt"})  # raises ViolationErr
 ```
 
 `destructiveHint` is an advisory, possibly-untrusted hint, so `block_destructive` is defense-in-depth — pair it with an explicit `tools_allowed` for high assurance. (`pip install "pactrun[mcp]"`)
+
+### Pydantic AI
+
+Add pactrun as a Pydantic AI capability. Every model response and tool call in each run goes through the contract, and a blocked tool never runs:
+
+```python
+from pydantic_ai import Agent
+from pactrun import Contract, must_not_call, token_budget
+from pactrun.adapters import PactrunCapability
+
+contract = Contract("support").forbid(must_not_call("delete_user")).require(token_budget(50_000))
+agent = Agent("openai:gpt-5.2", tools=[...], capabilities=[PactrunCapability(contract)])
+agent.run_sync("Close ticket 42")   # raises ViolationError before delete_user runs
+```
+
+Each run gets a fresh session, so budgets are per run. Pass `on_tool_block="return_to_model"` to skip the tool and hand the refusal back to the model instead of ending the run, or `session_kwargs={"mode": "monitor"}` to record without blocking. Cost comes from Pydantic AI's own pricing; when it can't price a model, cost is recorded as 0, so use `token_budget` for those. Output tools and provider-run tools (such as provider web search) don't pass through the tool hook and can't be blocked here. (`pip install "pactrun[pydantic-ai]"`, Pydantic AI 1.71 or later)
 
 ### OpenTelemetry (experimental)
 
@@ -574,7 +590,7 @@ pactrun is intentionally small, dependency-light, and framework-agnostic. It is 
 
 Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`):
 
-- **More adapters** — Pydantic AI, and native CrewAI tool-event integration (today: OpenAI, Anthropic, Gemini, LangChain/LangGraph, LiteLLM/CrewAI, manual).
+- **More adapters** — native CrewAI tool-event integration (today: OpenAI, Anthropic, Gemini, LangChain/LangGraph, LiteLLM/CrewAI, MCP, Pydantic AI, manual).
 - **Compliance export** — mapping contract specs to EU AI Act Annex IV / OWASP Agentic Top-10 evidence. (This produces *machine-readable inputs* to a technical file, not a complete compliance package.)
 - **Formal composition** — provable composition of contracts across multi-agent pipelines. This is a research direction, not a current feature.
 
@@ -650,7 +666,7 @@ pactrun is a guardrail, so a bypass or a check that fails open is treated as a s
 git clone https://github.com/beyhangl/pactrun
 cd pactrun
 pip install -e ".[dev]"
-pytest        # 713 tests
+pytest        # 734 tests
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) — in particular, every security fix needs a test that **fails** without the fix. Please open an issue first for significant changes.

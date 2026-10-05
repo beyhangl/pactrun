@@ -24,4 +24,7 @@ def __getattr__(name: str):
     if name == "GuardedMCPSession":
         from pactrun.adapters.mcp import GuardedMCPSession
         return GuardedMCPSession
+    if name == "PactrunCapability":
+        from pactrun.adapters.pydantic_ai import PactrunCapability
+        return PactrunCapability
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

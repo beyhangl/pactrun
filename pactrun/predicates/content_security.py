@@ -42,13 +42,24 @@ def _decoded_variants(text: str, decode) -> list[str]:
         import base64
         import re
 
+        # A payload is rarely a clean token: it sits after "payload=", "id_" or
+        # a URL, so the matched run can start mid-group. Padding only ends a
+        # payload, and the standard and URL-safe alphabets disagree on "+/"
+        # versus "-_". Try each "="-free segment in both alphabets at every
+        # alignment so a prefix cannot throw the decode off.
         for m in re.finditer(r"[A-Za-z0-9+/=_-]{16,}", text):
-            chunk = m.group()
-            try:
-                padded = chunk + "=" * (-len(chunk) % 4)
-                variants.append(base64.b64decode(padded, validate=False).decode("utf-8", "ignore"))
-            except Exception:  # noqa: BLE001 - malformed base64 is simply skipped
-                continue
+            for segment in re.split(r"=+", m.group()):
+                if len(segment) < 16:
+                    continue
+                for alphabet in (b"+/", b"-_"):
+                    for offset in range(4):
+                        piece = segment[offset:]
+                        padded = piece + "=" * (-len(piece) % 4)
+                        try:
+                            raw = base64.b64decode(padded, altchars=alphabet, validate=False)
+                        except Exception:  # noqa: BLE001 - malformed base64 is simply skipped
+                            continue
+                        variants.append(raw.decode("utf-8", "ignore"))
     return variants
 
 

@@ -396,21 +396,52 @@ def no_invisible_text(
 
 
 _VALID_EXFIL_FORMS = {"markdown_image", "markdown_link", "html_image", "html_link"}
-_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*<?([^)>\s]+)")
-_MD_LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(\s*<?([^)>\s]+)")
+# Link text may itself contain one level of brackets: ![a [b] c](url).
+_MD_TEXT = r"\[((?:[^\[\]]|\[[^\]]*\])*)\]"
+_MD_IMAGE_RE = re.compile(r"!" + _MD_TEXT + r"\(\s*<?([^)>\s]+)")
+_MD_LINK_RE = re.compile(r"(?<!!)" + _MD_TEXT + r"\(\s*<?([^)>\s]+)")
+# Reference style: ![alt][label], ![label][] or ![label], resolved against a
+# "[label]: url" definition anywhere in the text.
+_MD_IMAGE_REF_RE = re.compile(r"!" + _MD_TEXT + r"(?:\[([^\]]*)\])?(?!\()")
+_MD_REF_DEF_RE = re.compile(r"^[ \t]{0,3}\[([^\]]+)\]:[ \t]*<?([^\s>]+)", re.MULTILINE)
 _HTML_IMG_RE = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']?([^\"'>\s]+)", re.IGNORECASE)
+# srcset on <img> / <source> is fetched automatically, like src.
+_HTML_SRCSET_RE = re.compile(
+    r"<(?:img|source)\b[^>]*?\bsrcset\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))", re.IGNORECASE
+)
 _HTML_A_RE = re.compile(r"<a\b[^>]*?\bhref\s*=\s*[\"']?([^\"'>\s]+)", re.IGNORECASE)
+
+
+def _ref_label(label: str) -> str:
+    return " ".join(label.split()).lower()
 
 
 def _extract_exfil_links(text: str, forms):
     """Yield (url, is_image, form) from markdown/HTML image & link constructs."""
     out = []
-    if "markdown_image" in forms:
-        out += [(m.group(1), True, "markdown_image") for m in _MD_IMAGE_RE.finditer(text)]
-    if "markdown_link" in forms:
-        out += [(m.group(1), False, "markdown_link") for m in _MD_LINK_RE.finditer(text)]
+    if "markdown_image" in forms or "markdown_link" in forms:
+        defs = {_ref_label(m.group(1)): m.group(2) for m in _MD_REF_DEF_RE.finditer(text)}
+        image_labels = set()
+        if defs:
+            for m in _MD_IMAGE_REF_RE.finditer(text):
+                label = _ref_label(m.group(2) or m.group(1))
+                if label in defs:
+                    image_labels.add(label)
+        if "markdown_image" in forms:
+            out += [(m.group(2), True, "markdown_image") for m in _MD_IMAGE_RE.finditer(text)]
+            out += [(defs[label], True, "markdown_image") for label in sorted(image_labels)]
+        if "markdown_link" in forms:
+            out += [(m.group(2), False, "markdown_link") for m in _MD_LINK_RE.finditer(text)]
+            out += [(url, False, "markdown_link") for label, url in sorted(defs.items())
+                    if label not in image_labels]
     if "html_image" in forms:
         out += [(m.group(1), True, "html_image") for m in _HTML_IMG_RE.finditer(text)]
+        for m in _HTML_SRCSET_RE.finditer(text):
+            srcset = next(g for g in m.groups() if g is not None)
+            for candidate in srcset.split(","):
+                url = candidate.strip().split(" ")[0]
+                if url:
+                    out.append((url, True, "html_image"))
     if "html_link" in forms:
         out += [(m.group(1), False, "html_link") for m in _HTML_A_RE.finditer(text)]
     return out

@@ -107,7 +107,8 @@ def no_exfiltration_after_untrusted(
     a long encoded blob of ``encoded_arg_min_len`` chars — an out-of-band channel
     even off the exfil list) when a prior event in the run was an untrusted
     ingest: a tool name in ``untrusted_tools``, or an event the host tagged
-    ``metadata[untrusted_tag]`` (optionally restricted to ``untrusted_tag_values``).
+    ``metadata[untrusted_tag]`` (optionally restricted to ``untrusted_tag_values``)
+    or ``metadata["untrusted"] = True``, the label the other taint guards use.
     """
     untrusted_tools = tuple(untrusted_tools)
     exfil_tools = tuple(exfil_tools)
@@ -130,8 +131,13 @@ def no_exfiltration_after_untrusted(
                 continue
             if e.kind == EventKind.TOOL_CALL and _name_matches(e.tool_name, untrusted_tools):
                 return True
-            val = (e.metadata or {}).get(untrusted_tag)
+            meta = e.metadata or {}
+            val = meta.get(untrusted_tag)
             if val and (tag_values is None or val in tag_values):
+                return True
+            # The label untrusted_taint_to_sink and lethal_trifecta_guard read
+            # by default. A host that sets only this one must not lose the check.
+            if meta.get("untrusted") is True:
                 return True
         return False
 
