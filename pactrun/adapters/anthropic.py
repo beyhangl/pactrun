@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
+from pactrun.core.usage import CacheRates, TokenUsage, count, lookup, price, read_field, total
 
 
 class AnthropicAdapter:
@@ -99,14 +100,7 @@ class AnthropicAdapter:
             return
 
         model = getattr(response, "model", None) or kwargs.get("model", "unknown")
-        prompt_tokens = 0
-        completion_tokens = 0
-        try:
-            usage = response.usage
-            prompt_tokens = getattr(usage, "input_tokens", 0) or 0
-            completion_tokens = getattr(usage, "output_tokens", 0) or 0
-        except AttributeError:
-            pass
+        usage = usage_from_anthropic(getattr(response, "usage", None))
 
         output = ""
         try:
@@ -122,15 +116,12 @@ class AnthropicAdapter:
         except (AttributeError, TypeError):
             pass
 
-        cost = _estimate_cost(model, prompt_tokens, completion_tokens)
-
         session.emit_llm_response(
             model=model,
             output=output,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost=cost,
+            cost=_estimate_cost(model, usage),
             duration_ms=duration_ms,
+            **usage.event_kwargs(),
         )
 
     def _emit_error(self, kwargs: dict, duration_ms: float, error: str) -> None:
@@ -145,6 +136,33 @@ class AnthropicAdapter:
         )
 
 
+def usage_from_anthropic(usage: Any) -> TokenUsage:
+    """Normalise an Anthropic ``Usage`` (or streaming usage) to pactrun's convention.
+
+    Anthropic's ``input_tokens`` counts only the input AFTER the last cache
+    breakpoint; the total input is
+    ``input_tokens + cache_read_input_tokens + cache_creation_input_tokens``
+    (Anthropic prompt-caching docs, "Understanding the token breakdown").
+    ``cache_creation.ephemeral_1h_input_tokens`` is the part of the cache write
+    that went to the one-hour cache (absent on older SDKs: all writes are then
+    priced at the five-minute rate). ``output_tokens`` already includes
+    thinking; ``output_tokens_details.thinking_tokens`` is a subset of it.
+    """
+    if usage is None:
+        return TokenUsage()
+    read = count(read_field(usage, "cache_read_input_tokens"))
+    write = count(read_field(usage, "cache_creation_input_tokens"))
+    breakdown = read_field(usage, "cache_creation")
+    return TokenUsage(
+        prompt_tokens=total(read_field(usage, "input_tokens"), read, write),
+        completion_tokens=count(read_field(usage, "output_tokens")),
+        cache_read_tokens=read,
+        cache_write_tokens=write,
+        cache_write_1h_tokens=count(read_field(breakdown, "ephemeral_1h_input_tokens")),
+        reasoning_tokens=count(read_field(read_field(usage, "output_tokens_details"), "thinking_tokens")),
+    )
+
+
 _PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4-6": (15.00, 75.00),
     "claude-sonnet-4-6": (3.00, 15.00),
@@ -152,13 +170,16 @@ _PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    pricing = _PRICING.get(model)
-    if not pricing:
-        for key, prices in _PRICING.items():
-            if model.startswith(key):
-                pricing = prices
-                break
+# Prompt-cache multipliers on the base input price, for every model above:
+# cache read (hit) 0.1x, 5-minute cache write 1.25x, 1-hour cache write 2x.
+# Source: platform.claude.com/docs/en/about-claude/pricing ("Prompt caching"
+# table), checked 2026-10-05. Exceptions there (Opus 5.5 reads 0.05x, Fable /
+# Mythos 5.1 reads 0.025x) are not in _PRICING, so they are not priced here.
+_CACHE_RATES = CacheRates(read=0.10, write=1.25, write_1h=2.0)
+
+
+def _estimate_cost(model: str, usage: TokenUsage) -> float:
+    pricing = lookup(_PRICING, model)
     if not pricing:
         return 0.0
-    return (prompt_tokens * pricing[0] + completion_tokens * pricing[1]) / 1_000_000
+    return price(usage, pricing[0], pricing[1], _CACHE_RATES)

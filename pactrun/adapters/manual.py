@@ -27,8 +27,18 @@ def emit_llm_call(
     cost: float = 0.0,
     duration_ms: float = 0.0,
     metadata: dict | None = None,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    reasoning_tokens: int = 0,
 ) -> list[Violation]:
     """Emit an LLM call event to the active session.
+
+    ``prompt_tokens`` is the TOTAL input including cached tokens, and
+    ``completion_tokens`` the total output including reasoning; the
+    ``cache_*_tokens`` and ``reasoning_tokens`` counts are subsets of those
+    (see ``pactrun.core.models.Event``). Anthropic users: add
+    ``cache_read_input_tokens`` and ``cache_creation_input_tokens`` to
+    ``input_tokens`` to get ``prompt_tokens``.
 
     Returns list of violations triggered (empty if compliant).
     """
@@ -44,6 +54,9 @@ def emit_llm_call(
         cost=cost,
         duration_ms=duration_ms,
         metadata=metadata,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        reasoning_tokens=reasoning_tokens,
     )
 
 

@@ -23,6 +23,7 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
+from pactrun.core.usage import CacheRates, TokenUsage, count, lookup, price, read_field
 
 
 class OpenAIAdapter:
@@ -116,16 +117,7 @@ class OpenAIAdapter:
 
         model = getattr(response, "model", None) or kwargs.get("model", "unknown")
 
-        # Extract token usage
-        prompt_tokens = 0
-        completion_tokens = 0
-        try:
-            usage = response.usage
-            if usage:
-                prompt_tokens = usage.prompt_tokens or 0
-                completion_tokens = usage.completion_tokens or 0
-        except AttributeError:
-            pass
+        usage = usage_from_openai(getattr(response, "usage", None))
 
         # Extract output text
         output = ""
@@ -135,8 +127,7 @@ class OpenAIAdapter:
         except (AttributeError, IndexError):
             pass
 
-        # Extract cost estimate
-        cost = _estimate_cost(model, prompt_tokens, completion_tokens)
+        cost = _estimate_cost(model, usage)
 
         # Emit tool calls if present
         try:
@@ -155,10 +146,9 @@ class OpenAIAdapter:
         session.emit_llm_response(
             model=model,
             output=output,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
             cost=cost,
             duration_ms=duration_ms,
+            **usage.event_kwargs(),
         )
 
     def _emit_error(self, kwargs: dict, duration_ms: float, error: str) -> None:
@@ -172,6 +162,30 @@ class OpenAIAdapter:
             duration_ms=duration_ms,
             metadata={"error": error},
         )
+
+
+def usage_from_openai(usage: Any) -> TokenUsage:
+    """Normalise an OpenAI Chat Completions ``CompletionUsage`` to pactrun's convention.
+
+    OpenAI already reports totals: ``prompt_tokens`` INCLUDES
+    ``prompt_tokens_details.cached_tokens`` (cache reads) and
+    ``prompt_tokens_details.cache_write_tokens`` (cache writes, reported for
+    GPT-5.6 and later; absent on older SDKs), and ``completion_tokens``
+    INCLUDES ``completion_tokens_details.reasoning_tokens``. Source:
+    openai-python ``types/completion_usage.py`` and the OpenAI prompt-caching
+    guide (``ordinaryInputTokens = inputTokens - cachedTokens - cacheWriteTokens``).
+    """
+    if usage is None:
+        return TokenUsage()
+    prompt_details = read_field(usage, "prompt_tokens_details")
+    completion_details = read_field(usage, "completion_tokens_details")
+    return TokenUsage(
+        prompt_tokens=count(read_field(usage, "prompt_tokens")),
+        completion_tokens=count(read_field(usage, "completion_tokens")),
+        cache_read_tokens=count(read_field(prompt_details, "cached_tokens")),
+        cache_write_tokens=count(read_field(prompt_details, "cache_write_tokens")),
+        reasoning_tokens=count(read_field(completion_details, "reasoning_tokens")),
+    )
 
 
 # Pricing table (per 1M tokens)
@@ -189,13 +203,25 @@ _PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    pricing = _PRICING.get(model)
-    if not pricing:
-        for key, prices in _PRICING.items():
-            if model.startswith(key):
-                pricing = prices
-                break
+# Cached-input multiplier on the base input price, per model family (same
+# prefix matching as _PRICING). Source: developers.openai.com/api/docs/pricing
+# Standard tier "Cached input" column divided by "Input", checked 2026-10-05:
+# gpt-5.4* $0.25/$2.50, gpt-4.1* $0.50/$2.00, gpt-4o* $1.25/$2.50,
+# o3 $0.50/$2.00, o4-mini $0.275/$1.10. Cache writes: the prompt-caching guide
+# says models before GPT-5.6 have no cache-write charge (write tokens bill as
+# ordinary input, 1.0x); none of the models above is GPT-5.6+.
+_CACHE_RATES: dict[str, CacheRates] = {
+    "gpt-5.4": CacheRates(read=0.10),
+    "gpt-4.1": CacheRates(read=0.25),
+    "gpt-4o": CacheRates(read=0.50),
+    "o3": CacheRates(read=0.25),
+    "o4-mini": CacheRates(read=0.25),
+}
+
+
+def _estimate_cost(model: str, usage: TokenUsage) -> float:
+    pricing = lookup(_PRICING, model)
     if not pricing:
         return 0.0
-    return (prompt_tokens * pricing[0] + completion_tokens * pricing[1]) / 1_000_000
+    rates = lookup(_CACHE_RATES, model) or CacheRates()
+    return price(usage, pricing[0], pricing[1], rates)

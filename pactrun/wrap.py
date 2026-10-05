@@ -37,6 +37,7 @@ from typing import Any
 from pactrun.contract import Contract
 from pactrun.core.enums import ClauseKind, OnFail, Severity
 from pactrun.core.models import Violation
+from pactrun.core.usage import TokenUsage
 from pactrun.predicates import (
     cost_under,
     drift_bounds,
@@ -280,8 +281,12 @@ class GuardedStream:
         self._model = kwargs.get("model", "unknown")
         self._seen_tools: set[str] = set()
         self._content: list[str] = []
-        self._prompt_tokens = 0
-        self._completion_tokens = 0
+        self._usage: TokenUsage | None = None
+        # Anthropic streams usage in two events: message_start (input + cache
+        # counts, incl. the 1-hour split) and message_delta (cumulative output,
+        # optionally cumulative input/cache counts).
+        self._a_start_usage: Any = None
+        self._a_delta_usage: Any = None
         self._recorded = False
 
     # -- sync iteration / context manager ----------------------------------
@@ -366,8 +371,9 @@ class GuardedStream:
                 self._note_tool(getattr(getattr(call, "function", None), "name", None))
         usage = getattr(chunk, "usage", None)
         if usage is not None:
-            self._prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-            self._completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+            from pactrun.adapters.openai import usage_from_openai
+
+            self._usage = usage_from_openai(usage)
             self._finalize(usage_seen=True)
 
     def _on_anthropic_chunk(self, chunk: Any) -> None:
@@ -381,11 +387,13 @@ class GuardedStream:
         elif ctype == "message_start":
             usage = getattr(getattr(chunk, "message", None), "usage", None)
             if usage is not None:
-                self._prompt_tokens = getattr(usage, "input_tokens", 0) or 0
+                self._a_start_usage = usage
+                self._usage = _merge_anthropic_stream_usage(self._a_start_usage, self._a_delta_usage)
         elif ctype == "message_delta":
             usage = getattr(chunk, "usage", None)
             if usage is not None:
-                self._completion_tokens = getattr(usage, "output_tokens", 0) or 0
+                self._a_delta_usage = usage
+                self._usage = _merge_anthropic_stream_usage(self._a_start_usage, self._a_delta_usage)
         elif ctype == "message_stop":
             self._finalize(usage_seen=True)
 
@@ -399,11 +407,11 @@ class GuardedStream:
             return
         self._recorded = True
         output = "".join(self._content)
-        if usage_seen and (self._prompt_tokens or self._completion_tokens):
-            cost = _actual_cost(self._model, self._prompt_tokens, self._completion_tokens)
+        usage = self._usage
+        if usage_seen and usage is not None and (usage.prompt_tokens or usage.completion_tokens):
             self._session.emit_llm_response(
-                model=self._model, output=output,
-                prompt_tokens=self._prompt_tokens, completion_tokens=self._completion_tokens, cost=cost,
+                model=self._model, output=output, cost=_actual_cost(self._model, usage),
+                **usage.event_kwargs(),
             )
         else:
             # No usage chunk (e.g. a cancelled stream) — don't silently drop the
@@ -447,6 +455,7 @@ def _estimate_worstcase_cost(kwargs: dict, default_max_tokens: int) -> tuple[flo
     return cost_model.precall_worstcase(
         model, kwargs.get("messages"), max_output,
         system=kwargs.get("system"), tools=kwargs.get("tools"),
+        cache_control=kwargs.get("cache_control"),
     )
 
 
@@ -455,13 +464,10 @@ def _estimate_worstcase_cost(kwargs: dict, default_max_tokens: int) -> tuple[flo
 # ---------------------------------------------------------------------------
 
 def _record_openai(session: Any, kwargs: dict, response: Any) -> None:
+    from pactrun.adapters.openai import usage_from_openai
+
     model = getattr(response, "model", None) or kwargs.get("model", "unknown")
-    prompt_tokens = 0
-    completion_tokens = 0
-    usage = getattr(response, "usage", None)
-    if usage is not None:
-        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+    usage = usage_from_openai(getattr(response, "usage", None))
 
     output = ""
     tool_names: list[tuple[str, dict]] = []
@@ -476,23 +482,18 @@ def _record_openai(session: Any, kwargs: dict, response: Any) -> None:
     except (AttributeError, IndexError, TypeError):
         pass
 
-    cost = _actual_cost(model, prompt_tokens, completion_tokens)
     session.emit_llm_response(
-        model=model, output=output, prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens, cost=cost,
+        model=model, output=output, cost=_actual_cost(model, usage), **usage.event_kwargs(),
     )
     for name, args in tool_names:
         session.emit_tool_call(name, args=args)
 
 
 def _record_anthropic(session: Any, kwargs: dict, response: Any) -> None:
+    from pactrun.adapters.anthropic import usage_from_anthropic
+
     model = getattr(response, "model", None) or kwargs.get("model", "unknown")
-    prompt_tokens = 0
-    completion_tokens = 0
-    usage = getattr(response, "usage", None)
-    if usage is not None:
-        prompt_tokens = getattr(usage, "input_tokens", 0) or 0
-        completion_tokens = getattr(usage, "output_tokens", 0) or 0
+    usage = usage_from_anthropic(getattr(response, "usage", None))
 
     output = ""
     tool_calls: list[tuple[str, dict]] = []
@@ -505,10 +506,8 @@ def _record_anthropic(session: Any, kwargs: dict, response: Any) -> None:
     except (AttributeError, TypeError):
         pass
 
-    cost = _actual_cost(model, prompt_tokens, completion_tokens)
     session.emit_llm_response(
-        model=model, output=output, prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens, cost=cost,
+        model=model, output=output, cost=_actual_cost(model, usage), **usage.event_kwargs(),
     )
     for name, args in tool_calls:
         session.emit_tool_call(name, args=args)
@@ -528,7 +527,42 @@ def _parse_tool_args(raw: Any) -> dict:
     return {}
 
 
-def _actual_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+def _merge_anthropic_stream_usage(start: Any, delta: Any) -> TokenUsage:
+    """Combine Anthropic's message_start and message_delta usage into one total.
+
+    ``message_delta`` usage is cumulative (anthropic-python
+    ``MessageDeltaUsage``): its output count is final, and its input/cache
+    counts, when present, supersede message_start's. The 1-hour write split
+    (``cache_creation``) only arrives on message_start.
+    """
+    from types import SimpleNamespace
+
+    from pactrun.adapters.anthropic import usage_from_anthropic
+    from pactrun.core.usage import read_field
+
+    def pick(name: str) -> Any:
+        value = read_field(delta, name)
+        return read_field(start, name) if value is None else value
+
+    merged = SimpleNamespace(
+        input_tokens=pick("input_tokens"),
+        cache_read_input_tokens=pick("cache_read_input_tokens"),
+        cache_creation_input_tokens=pick("cache_creation_input_tokens"),
+        cache_creation=read_field(start, "cache_creation"),
+        output_tokens=pick("output_tokens"),
+        output_tokens_details=pick("output_tokens_details"),
+    )
+    return usage_from_anthropic(merged)
+
+
+def _actual_cost(model: str, usage: TokenUsage) -> float:
     from pactrun import cost_model
 
-    return cost_model.actual_cost(model, prompt_tokens, completion_tokens)[0]
+    return cost_model.actual_cost(
+        model,
+        usage.prompt_tokens,
+        usage.completion_tokens,
+        cache_read_tokens=usage.cache_read_tokens,
+        cache_write_tokens=usage.cache_write_tokens,
+        cache_write_1h_tokens=usage.cache_write_1h_tokens,
+    )[0]

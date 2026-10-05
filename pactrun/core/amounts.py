@@ -21,7 +21,15 @@ import math
 from typing import Any
 
 # Event fields that feed budget arithmetic.
-AMOUNT_FIELDS: tuple[str, ...] = ("cost_usd", "prompt_tokens", "completion_tokens", "duration_ms")
+AMOUNT_FIELDS: tuple[str, ...] = (
+    "cost_usd",
+    "prompt_tokens",
+    "completion_tokens",
+    "duration_ms",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+)
 
 # event.metadata key holding {field: repr(raw_value)} for rejected amounts.
 INVALID_AMOUNTS_KEY = "pactrun.invalid_amounts"

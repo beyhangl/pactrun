@@ -16,7 +16,28 @@ from pactrun.core.enums import ClauseKind, EventKind, OnFail, Severity
 
 @dataclass
 class Event:
-    """A single event in an agent session."""
+    """A single event in an agent session.
+
+    Token accounting convention for ``LLM_CALL`` events (every adapter
+    normalises its provider to this; follow it when emitting manually):
+
+    - ``prompt_tokens`` is the TOTAL input the call consumed, including tokens
+      read from and written to a provider prompt cache. This matches the
+      OpenTelemetry GenAI note that ``gen_ai.usage.input_tokens`` SHOULD
+      include cached tokens. (Anthropic reports ``input_tokens`` WITHOUT cache
+      reads/writes; the adapter adds them back.)
+    - ``cache_read_tokens`` and ``cache_write_tokens`` are SUBSETS of
+      ``prompt_tokens``: input served from, and written to, the provider cache.
+      They are billed at different rates from uncached input, which is why
+      they are recorded separately.
+    - ``completion_tokens`` is the TOTAL output, including reasoning/thinking
+      tokens; ``reasoning_tokens`` is a SUBSET of it.
+    - ``cost_usd`` is the cost of the whole call with cache reads/writes priced
+      at their own rates.
+
+    So ``prompt_tokens + completion_tokens`` is what the call consumed, and
+    ``token_budget`` / ``SessionState.total_tokens`` count cached input too.
+    """
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     kind: EventKind = EventKind.LLM_CALL
     timestamp: float = field(default_factory=time.time)
@@ -29,6 +50,9 @@ class Event:
     completion_tokens: int = 0
     cost_usd: float = 0.0
     duration_ms: float = 0.0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
 
     # Tool call fields
     tool_name: str | None = None
@@ -52,6 +76,9 @@ class Event:
             "completion_tokens": self.completion_tokens,
             "cost_usd": self.cost_usd,
             "duration_ms": self.duration_ms,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
             "tool_name": self.tool_name,
             "tool_args": self.tool_args,
             "tool_result": self.tool_result,
@@ -72,6 +99,9 @@ class Event:
             completion_tokens=data.get("completion_tokens", 0),
             cost_usd=data.get("cost_usd", 0.0),
             duration_ms=data.get("duration_ms", 0.0),
+            cache_read_tokens=data.get("cache_read_tokens", 0),
+            cache_write_tokens=data.get("cache_write_tokens", 0),
+            reasoning_tokens=data.get("reasoning_tokens", 0),
             tool_name=data.get("tool_name"),
             tool_args=data.get("tool_args"),
             tool_result=data.get("tool_result"),
@@ -94,6 +124,10 @@ class SessionState:
     turn_number: int = 0
     total_cost_usd: float = 0.0
     total_tokens: int = 0
+    # Subsets of total_tokens (see the Event token convention).
+    total_cache_read_tokens: int = 0
+    total_cache_write_tokens: int = 0
+    total_reasoning_tokens: int = 0
     total_tool_calls: int = 0
     total_llm_calls: int = 0
     tool_call_history: list[str] = field(default_factory=list)
@@ -109,6 +143,9 @@ class SessionState:
             "turn_number": self.turn_number,
             "total_cost_usd": self.total_cost_usd,
             "total_tokens": self.total_tokens,
+            "total_cache_read_tokens": self.total_cache_read_tokens,
+            "total_cache_write_tokens": self.total_cache_write_tokens,
+            "total_reasoning_tokens": self.total_reasoning_tokens,
             "total_tool_calls": self.total_tool_calls,
             "total_llm_calls": self.total_llm_calls,
             "tool_call_history": self.tool_call_history,

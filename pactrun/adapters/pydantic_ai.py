@@ -32,8 +32,11 @@ Where the session comes from:
 What is recorded:
 
 - one ``LLM_CALL`` event per model response, from ``after_model_request``:
-  model name, ``input_tokens``/``output_tokens`` as prompt/completion tokens,
-  the response text, and cost. Cost is ``usage.cost`` when Pydantic AI has
+  model name, ``input_tokens``/``output_tokens`` as prompt/completion tokens
+  (Pydantic AI already normalises ``input_tokens`` to INCLUDE cache reads and
+  writes, matching pactrun's convention), ``cache_read_tokens`` /
+  ``cache_write_tokens``, reasoning tokens from ``usage.details``, the response
+  text, and cost. Cost is ``usage.cost`` when Pydantic AI has
   already set it, otherwise Pydantic AI's own ``ModelResponse.cost()``
   (genai-prices). When that cannot price the model (unknown model, the offline
   ``test``/``function`` models) cost is recorded as ``0`` and
@@ -208,6 +211,9 @@ class PactrunCapability(AbstractCapability[Any]):
             output=response.text or "",
             prompt_tokens=int(usage.input_tokens or 0),
             completion_tokens=int(usage.output_tokens or 0),
+            cache_read_tokens=int(getattr(usage, "cache_read_tokens", 0) or 0),
+            cache_write_tokens=int(getattr(usage, "cache_write_tokens", 0) or 0),
+            reasoning_tokens=_reasoning_tokens(usage),
             cost=cost,
             duration_ms=duration_ms,
             metadata={
@@ -271,6 +277,21 @@ class PactrunCapability(AbstractCapability[Any]):
 
 def _is_contract(obj: Any) -> bool:
     return obj is not None and not isinstance(obj, Session)
+
+
+# `RequestUsage.details` keys that hold reasoning tokens, per provider model
+# in pydantic-ai 2.54: OpenAI `reasoning_tokens`, Anthropic `thinking_tokens`,
+# Google `thoughts_tokens`. Each is already inside `output_tokens`.
+_REASONING_DETAIL_KEYS = ("reasoning_tokens", "thinking_tokens", "thoughts_tokens")
+
+
+def _reasoning_tokens(usage: Any) -> int:
+    details = getattr(usage, "details", None) or {}
+    for key in _REASONING_DETAIL_KEYS:
+        value = details.get(key)
+        if value:
+            return int(value)
+    return 0
 
 
 def _response_cost(response: Any) -> tuple[float, str]:

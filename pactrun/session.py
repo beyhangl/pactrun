@@ -203,8 +203,16 @@ class Session:
         cost: float = 0.0,
         duration_ms: float = 0.0,
         metadata: dict | None = None,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        reasoning_tokens: int = 0,
     ) -> list[Violation]:
-        """Record an LLM response event and evaluate applicable clauses."""
+        """Record an LLM response event and evaluate applicable clauses.
+
+        Token convention (see ``Event``): ``prompt_tokens`` is the total input
+        including cache reads/writes, ``completion_tokens`` the total output
+        including reasoning; the ``cache_*`` and ``reasoning`` counts are subsets.
+        """
         event = Event(
             kind=EventKind.LLM_CALL,
             model=model,
@@ -214,6 +222,9 @@ class Session:
             completion_tokens=completion_tokens,
             cost_usd=cost,
             duration_ms=duration_ms,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            reasoning_tokens=reasoning_tokens,
             metadata=metadata or {},
         )
         return self.record_event(event)
@@ -340,6 +351,9 @@ class Session:
             self._state.total_cost_usd += event.cost_usd
             tokens = event.prompt_tokens + event.completion_tokens
             self._state.total_tokens += tokens
+            self._state.total_cache_read_tokens += event.cache_read_tokens
+            self._state.total_cache_write_tokens += event.cache_write_tokens
+            self._state.total_reasoning_tokens += event.reasoning_tokens
             self._state.total_llm_calls += 1
             if event.output:
                 self._state.output_history.append(str(event.output))

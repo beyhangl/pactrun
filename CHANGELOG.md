@@ -12,6 +12,16 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Security
 
+- Prompt caching broke token and cost accounting in every adapter. Anthropic
+  dropped cache reads and writes from the token total, so `token_budget`
+  under-counted and cached runs looked cheap. OpenAI billed cached input at the
+  full rate. Gemini dropped thinking and tool-use input tokens. The `wrap()`
+  pre-call gate priced Anthropic cache writes (1.25x or 2x input) at 1x.
+  `Event` now has `cache_read_tokens`, `cache_write_tokens` and
+  `reasoning_tokens`, cached input is priced at each provider's rate, and the
+  OTel span emits `gen_ai.usage.cache_read.input_tokens`,
+  `gen_ai.usage.cache_write.input_tokens` and
+  `gen_ai.usage.reasoning.output_tokens`.
 - `no_injection_phrases(decode=("base64",))` missed an encoded payload whenever
   text was glued to its front (`payload=...`, `id_...`, a URL query) or it used
   the URL-safe alphabet. It now decodes at every alignment in both alphabets.
@@ -89,6 +99,14 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Changed
 
+- **BREAKING:** `prompt_tokens`, `total_tokens`, `token_budget` and
+  `gen_ai.usage.input_tokens` now count all input, including cached input. On
+  Anthropic with a large cached prefix, existing token budgets trip much
+  sooner. On Gemini they also include thinking and tool-use input tokens.
+- Cost changes direction by provider: cached Anthropic runs cost more than
+  before (reads and writes are now counted), cached OpenAI and Gemini runs cost
+  less (cached input is discounted). `cost_under` can trip at a different point.
+- The LangChain adapter reads `usage_metadata` before `llm_output`.
 - **BREAKING:** a predicate that raises an exception is now recorded as a
   failed check and routed through the clause's `on_fail`, instead of the
   exception escaping `record_event`. A default `block` clause still halts the

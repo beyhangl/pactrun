@@ -29,6 +29,7 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
+from pactrun.core.usage import CacheRates, TokenUsage, count, lookup, price, read_field, total
 
 try:
     from langchain_core.callbacks import BaseCallbackHandler
@@ -67,16 +68,14 @@ class PactrunCallbackHandler(BaseCallbackHandler):
 
         model = (getattr(response, "llm_output", None) or {}).get("model_name") or "unknown"
         output = _extract_text(response)
-        prompt_tokens, completion_tokens = _extract_usage(response)
-        cost = _estimate_cost(model, prompt_tokens, completion_tokens)
+        usage = _extract_usage(response)
 
         session.emit_llm_response(
             model=model,
             output=output,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost=cost,
+            cost=_estimate_cost(model, usage),
             duration_ms=duration_ms,
+            **usage.event_kwargs(),
         )
 
     def on_llm_error(self, error, *, run_id=None, **kwargs: Any) -> None:
@@ -110,22 +109,73 @@ def _extract_text(response) -> str:
         return ""
 
 
-def _extract_usage(response) -> tuple[int, int]:
-    # 1) llm_output.token_usage (OpenAI-style) or .usage
-    llm_output = getattr(response, "llm_output", None) or {}
-    usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
-    prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-    completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-    if prompt or completion:
-        return int(prompt), int(completion)
+def _extract_usage(response) -> TokenUsage:
+    """Token usage of an ``LLMResult`` in pactrun's convention.
 
-    # 2) usage_metadata on the message (newer LangChain chat models)
+    Prefers the message's ``usage_metadata`` (LangChain's provider-neutral
+    ``UsageMetadata``): its ``input_tokens`` is documented as the "sum of all
+    input token types" (so it includes cache reads/writes) and ``output_tokens``
+    likewise includes reasoning; ``input_token_details.cache_read`` /
+    ``cache_creation`` and ``output_token_details.reasoning`` are subsets.
+    Falls back to the provider-raw ``llm_output`` usage dict.
+    """
     try:
         message = getattr(response.generations[0][0], "message", None)
-        meta = getattr(message, "usage_metadata", None) or {}
-        return int(meta.get("input_tokens", 0)), int(meta.get("output_tokens", 0))
     except (AttributeError, IndexError, TypeError):
-        return 0, 0
+        message = None
+    meta = getattr(message, "usage_metadata", None)
+    if meta:
+        return _from_usage_metadata(meta)
+
+    llm_output = getattr(response, "llm_output", None) or {}
+    raw = llm_output.get("token_usage") or llm_output.get("usage") or {}
+    return _from_raw_usage(raw)
+
+
+def _from_usage_metadata(meta) -> TokenUsage:
+    in_details = read_field(meta, "input_token_details")
+    out_details = read_field(meta, "output_token_details")
+    write = count(read_field(in_details, "cache_creation"))
+    write_1h = count(read_field(in_details, "ephemeral_1h_input_tokens"))
+    if not write:
+        # langchain-anthropic, when Anthropic splits the write by TTL, zeroes
+        # `cache_creation` and reports `ephemeral_5m_input_tokens` /
+        # `ephemeral_1h_input_tokens` instead (chat_models._create_usage_metadata).
+        write = total(read_field(in_details, "ephemeral_5m_input_tokens"), write_1h)
+    return TokenUsage(
+        prompt_tokens=count(read_field(meta, "input_tokens")),
+        completion_tokens=count(read_field(meta, "output_tokens")),
+        cache_read_tokens=count(read_field(in_details, "cache_read")),
+        cache_write_tokens=write,
+        cache_write_1h_tokens=write_1h,
+        reasoning_tokens=count(read_field(out_details, "reasoning")),
+    )
+
+
+def _from_raw_usage(raw) -> TokenUsage:
+    if not isinstance(raw, dict):
+        return TokenUsage()
+    if raw.get("prompt_tokens") is not None or raw.get("completion_tokens") is not None:
+        # OpenAI-style: totals already include cached input and reasoning.
+        prompt_details = raw.get("prompt_tokens_details") or {}
+        completion_details = raw.get("completion_tokens_details") or {}
+        return TokenUsage(
+            prompt_tokens=count(raw.get("prompt_tokens")),
+            completion_tokens=count(raw.get("completion_tokens")),
+            cache_read_tokens=count(read_field(prompt_details, "cached_tokens")),
+            cache_write_tokens=count(read_field(prompt_details, "cache_write_tokens")),
+            reasoning_tokens=count(read_field(completion_details, "reasoning_tokens")),
+        )
+    # Anthropic-style: input_tokens EXCLUDES cache reads and writes.
+    read = count(raw.get("cache_read_input_tokens"))
+    write = count(raw.get("cache_creation_input_tokens"))
+    return TokenUsage(
+        prompt_tokens=total(raw.get("input_tokens"), read, write),
+        completion_tokens=count(raw.get("output_tokens")),
+        cache_read_tokens=read,
+        cache_write_tokens=write,
+        cache_write_1h_tokens=count(read_field(raw.get("cache_creation"), "ephemeral_1h_input_tokens")),
+    )
 
 
 # Best-effort pricing per 1M tokens (input, output) for common model families.
@@ -145,13 +195,31 @@ _PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    pricing = _PRICING.get(model)
-    if not pricing:
-        for key, prices in _PRICING.items():
-            if model.startswith(key):
-                pricing = prices
-                break
+# Cache multipliers on the base input price, same prefixes as _PRICING. Sources
+# (checked 2026-10-05) are the ones documented in the provider adapters:
+# OpenAI pricing page cached-input column (gpt-5.4 0.1x, gpt-4.1 0.25x,
+# gpt-4o 0.5x; no write charge before GPT-5.6), Anthropic pricing page (read
+# 0.1x, 5-minute write 1.25x, 1-hour write 2x), Gemini pricing page /
+# genai-prices 0.1.9 (2.5 Pro/Flash 0.1x, 2.0 Flash and 1.5 Flash 0.25x, 1.5 Pro
+# no published cached rate so 1.0x).
+_ANTHROPIC_CACHE = CacheRates(read=0.10, write=1.25, write_1h=2.0)
+_CACHE_RATES: dict[str, CacheRates] = {
+    "gpt-5.4": CacheRates(read=0.10),
+    "gpt-4.1": CacheRates(read=0.25),
+    "gpt-4o": CacheRates(read=0.50),
+    "claude-opus-4": _ANTHROPIC_CACHE,
+    "claude-sonnet-4": _ANTHROPIC_CACHE,
+    "claude-haiku-4": _ANTHROPIC_CACHE,
+    "gemini-2.5-pro": CacheRates(read=0.10),
+    "gemini-2.5-flash": CacheRates(read=0.10),
+    "gemini-2.0-flash": CacheRates(read=0.25),
+    "gemini-1.5-flash": CacheRates(read=0.25),
+}
+
+
+def _estimate_cost(model: str, usage: TokenUsage) -> float:
+    pricing = lookup(_PRICING, model)
     if not pricing:
         return 0.0
-    return (prompt_tokens * pricing[0] + completion_tokens * pricing[1]) / 1_000_000
+    rates = lookup(_CACHE_RATES, model) or CacheRates()
+    return price(usage, pricing[0], pricing[1], rates)

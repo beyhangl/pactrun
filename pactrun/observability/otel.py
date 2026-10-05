@@ -19,6 +19,22 @@ to target. Every ``gen_ai.*`` attribute is still Development status, and the
 Python constants for them are all marked deprecated pending that release, so
 this module writes the attribute names as literals on purpose. Not
 "stable / standard-compliant".
+
+Token usage attributes on ``chat`` spans match the GenAI registry
+(``model/gen-ai/registry.yaml``) of open-telemetry/semantic-conventions-genai
+at main ``b9ecbae`` (2026-09-30; schema ``gen-ai-dev/1.42.0-dev``, unreleased):
+
+- ``gen_ai.usage.input_tokens`` is the TOTAL input including cached tokens
+  (the registry: "SHOULD include all types of input tokens, including cached
+  tokens");
+- ``gen_ai.usage.cache_read.input_tokens`` / ``gen_ai.usage.cache_write.input_tokens``
+  are subsets of it (``changelog.d/440.breaking.md`` renamed
+  ``gen_ai.usage.cache_creation.input_tokens`` to ``cache_write``; pactrun
+  emits only the new name);
+- ``gen_ai.usage.output_tokens`` is the total output and
+  ``gen_ai.usage.reasoning.output_tokens`` a subset of it.
+
+The three breakdown attributes are emitted only when non-zero.
 """
 
 from __future__ import annotations
@@ -135,9 +151,16 @@ class OTelObserver:
                     _set_system(span, provider)
             span.set_attribute("gen_ai.usage.input_tokens", int(event.prompt_tokens or 0))
             span.set_attribute("gen_ai.usage.output_tokens", int(event.completion_tokens or 0))
+            for attr, value in (
+                ("gen_ai.usage.cache_read.input_tokens", event.cache_read_tokens),
+                ("gen_ai.usage.cache_write.input_tokens", event.cache_write_tokens),
+                ("gen_ai.usage.reasoning.output_tokens", event.reasoning_tokens),
+            ):
+                if value:
+                    span.set_attribute(attr, int(value))
             if event.cost_usd:
                 # Cost is NOT a GenAI convention attribute - the registry only
-                # defines gen_ai.usage.{input,output}_tokens - so keep it in
+                # defines gen_ai.usage.* token counts - so keep it in
                 # pactrun's own namespace instead of squatting gen_ai.*.
                 span.set_attribute("pactrun.usage.cost", float(event.cost_usd))
         elif event.kind == EventKind.TOOL_CALL:

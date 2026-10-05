@@ -22,6 +22,7 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
+from pactrun.core.usage import CacheRates, TokenUsage, count, lookup, price, read_field, total
 
 
 class GeminiAdapter:
@@ -108,12 +109,7 @@ class GeminiAdapter:
 
         model = kwargs.get("model") or getattr(response, "model_version", None) or "unknown"
 
-        prompt_tokens = 0
-        completion_tokens = 0
-        usage = getattr(response, "usage_metadata", None)
-        if usage is not None:
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
-            completion_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        usage = usage_from_gemini(getattr(response, "usage_metadata", None))
 
         # Emit any function (tool) calls the model requested.
         try:
@@ -131,15 +127,12 @@ class GeminiAdapter:
         except Exception:
             output = ""
 
-        cost = _estimate_cost(model, prompt_tokens, completion_tokens)
-
         session.emit_llm_response(
             model=model,
             output=output,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost=cost,
+            cost=_estimate_cost(model, usage),
             duration_ms=duration_ms,
+            **usage.event_kwargs(),
         )
 
     def _emit_error(self, kwargs: dict, duration_ms: float, error: str) -> None:
@@ -154,6 +147,34 @@ class GeminiAdapter:
         )
 
 
+def usage_from_gemini(usage: Any) -> TokenUsage:
+    """Normalise a google-genai ``GenerateContentResponseUsageMetadata``.
+
+    Per the google-genai SDK field docs, ``total_token_count`` is the sum of
+    ``prompt_token_count``, ``candidates_token_count``,
+    ``tool_use_prompt_token_count`` and ``thoughts_token_count``:
+
+    - input = ``prompt_token_count`` (which already INCLUDES
+      ``cached_content_token_count``) + ``tool_use_prompt_token_count``;
+    - output = ``candidates_token_count`` + ``thoughts_token_count`` (thinking
+      is billed as output and is NOT inside ``candidates_token_count``).
+
+    Gemini has no per-request cache-write count (explicit caches are created
+    separately and billed per hour of storage), so ``cache_write_tokens`` is 0.
+    """
+    if usage is None:
+        return TokenUsage()
+    thoughts = count(read_field(usage, "thoughts_token_count"))
+    return TokenUsage(
+        prompt_tokens=total(
+            read_field(usage, "prompt_token_count"), read_field(usage, "tool_use_prompt_token_count")
+        ),
+        completion_tokens=total(read_field(usage, "candidates_token_count"), thoughts),
+        cache_read_tokens=count(read_field(usage, "cached_content_token_count")),
+        reasoning_tokens=thoughts,
+    )
+
+
 # Best-effort pricing per 1M tokens (input, output) for common Gemini models.
 _PRICING: dict[str, tuple[float, float]] = {
     "gemini-2.5-pro": (1.25, 10.00),
@@ -164,13 +185,25 @@ _PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    pricing = _PRICING.get(model)
-    if not pricing:
-        for key, prices in _PRICING.items():
-            if model.startswith(key):
-                pricing = prices
-                break
+# Cached-input (context caching) multiplier on the base input price. Sources,
+# checked 2026-10-05: ai.google.dev/gemini-api/docs/pricing for 2.5 Pro
+# ($0.125 vs $1.25, prompts <= 200k) and 2.5 Flash ($0.03 vs $0.30); Google
+# no longer lists 2.0 Flash / 1.5, so those come from the genai-prices 0.1.9
+# snapshot (2.0 Flash $0.025 vs $0.10, 1.5 Flash $0.01875 vs $0.075).
+# genai-prices has no cached rate for 1.5 Pro, so it gets no discount (1.0x,
+# an over-estimate). Cache storage (per token-hour) is not per request and is
+# not priced here.
+_CACHE_RATES: dict[str, CacheRates] = {
+    "gemini-2.5-pro": CacheRates(read=0.10),
+    "gemini-2.5-flash": CacheRates(read=0.10),
+    "gemini-2.0-flash": CacheRates(read=0.25),
+    "gemini-1.5-flash": CacheRates(read=0.25),
+}
+
+
+def _estimate_cost(model: str, usage: TokenUsage) -> float:
+    pricing = lookup(_PRICING, model)
     if not pricing:
         return 0.0
-    return (prompt_tokens * pricing[0] + completion_tokens * pricing[1]) / 1_000_000
+    rates = lookup(_CACHE_RATES, model) or CacheRates()
+    return price(usage, pricing[0], pricing[1], rates)

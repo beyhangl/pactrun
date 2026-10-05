@@ -30,6 +30,7 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
+from pactrun.core.usage import TokenUsage, count, read_field
 
 
 class LiteLLMAdapter:
@@ -113,12 +114,7 @@ class LiteLLMAdapter:
 
         model = getattr(response, "model", None) or kwargs.get("model", "unknown")
 
-        prompt_tokens = 0
-        completion_tokens = 0
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        usage = usage_from_litellm(getattr(response, "usage", None))
 
         output = ""
         try:
@@ -135,10 +131,9 @@ class LiteLLMAdapter:
         session.emit_llm_response(
             model=model,
             output=output,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
             cost=_extract_cost(response),
             duration_ms=duration_ms,
+            **usage.event_kwargs(),
         )
 
     def _emit_error(self, kwargs: dict, duration_ms: float, error: str) -> None:
@@ -151,6 +146,37 @@ class LiteLLMAdapter:
             duration_ms=duration_ms,
             metadata={"error": error},
         )
+
+
+def usage_from_litellm(usage: Any) -> TokenUsage:
+    """Normalise a LiteLLM ``Usage`` to pactrun's convention.
+
+    LiteLLM already converts every provider to OpenAI's convention:
+    ``prompt_tokens`` includes cache reads and writes (its Anthropic
+    transformation adds ``cache_read_input_tokens`` and
+    ``cache_creation_input_tokens`` back in) and ``completion_tokens`` includes
+    reasoning (its Gemini transformation adds ``thoughtsTokenCount``). Cache
+    reads are ``prompt_tokens_details.cached_tokens``; cache writes are
+    ``prompt_tokens_details.cache_creation_tokens`` (Anthropic) or
+    ``cache_write_tokens`` (OpenAI). Verified against litellm 1.82.6
+    (``types/utils.py``, ``llms/anthropic/chat/transformation.py``,
+    ``llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py``).
+    Cost comes from LiteLLM itself, which prices the cache slices.
+    """
+    if usage is None:
+        return TokenUsage()
+    prompt_details = read_field(usage, "prompt_tokens_details")
+    completion_details = read_field(usage, "completion_tokens_details")
+    write = read_field(prompt_details, "cache_creation_tokens")
+    if write is None:
+        write = read_field(prompt_details, "cache_write_tokens")
+    return TokenUsage(
+        prompt_tokens=count(read_field(usage, "prompt_tokens")),
+        completion_tokens=count(read_field(usage, "completion_tokens")),
+        cache_read_tokens=count(read_field(prompt_details, "cached_tokens")),
+        cache_write_tokens=count(write),
+        reasoning_tokens=count(read_field(completion_details, "reasoning_tokens")),
+    )
 
 
 def _parse_args(raw: Any) -> dict:
