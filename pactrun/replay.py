@@ -124,6 +124,8 @@ class PolicyTestResult:
     expected: list[str]
     violated: list[str]
     detail: str = ""
+    runs: int = 1
+    runs_passed: int = 0
 
 
 @dataclass
@@ -134,6 +136,23 @@ class PolicyTestReport:
     @property
     def passed(self) -> bool:
         return all(r.passed for r in self.results)
+
+    @property
+    def repeated(self) -> bool:
+        """True when any test replays more than one run of the same task."""
+        return any(r.runs > 1 for r in self.results)
+
+    @property
+    def pass_k(self) -> float:
+        """Share of tests whose verdict was right on **every** run (Pass^k)."""
+        return sum(r.passed for r in self.results) / len(self.results) if self.results else 0.0
+
+    @property
+    def mean_k(self) -> float:
+        """Average per-test share of runs with the right verdict (Mean@k)."""
+        if not self.results:
+            return 0.0
+        return sum(r.runs_passed / r.runs for r in self.results) / len(self.results)
 
 
 def _parse_expect(name: str, expect: Any) -> list[str]:
@@ -152,14 +171,43 @@ def _parse_expect(name: str, expect: Any) -> list[str]:
     )
 
 
+def _mismatch(expected: list[str], violated: list[str]) -> str:
+    missing = sorted(set(expected) - set(violated))
+    extra = sorted(set(violated) - set(expected))
+    parts = []
+    if missing:
+        parts.append(f"expected but did not fire: {', '.join(missing)}")
+    if extra:
+        parts.append(f"fired unexpectedly: {', '.join(extra)}")
+    return "; ".join(parts)
+
+
+def _trace_paths(name: str, spec: Any, base: Path) -> list[Path]:
+    """``traces:`` as a list of paths or one glob, relative to the YAML file."""
+    if isinstance(spec, str):
+        paths = sorted(base.glob(spec))
+        if not paths:
+            raise ContractLoadError(f"Test {name!r}: 'traces' glob {spec!r} matched no files")
+        return paths
+    if isinstance(spec, list) and spec and all(isinstance(p, str) for p in spec):
+        return [base / p for p in spec]
+    raise ContractLoadError(f"Test {name!r}: 'traces' must be a glob or a non-empty list of paths")
+
+
 def run_contract_tests(path: str | Path) -> PolicyTestReport:
     """Run the ``tests:`` block of a contract YAML file.
 
-    Each test supplies events - a ``trace:`` path (relative to the YAML file) or
-    inline ``events:`` - and an ``expect:``, either ``pass`` or
+    Each test supplies events - a ``trace:`` path (relative to the YAML file),
+    ``traces:`` (several recorded runs of the same task, as a list or a glob),
+    or inline ``events:`` - and an ``expect:``, either ``pass`` or
     ``{violated: [predicate, ...]}``. The violated set must match **exactly**:
     a test fails if an expected predicate did not fire *or* an unexpected one
     did, so over-blocking is caught as well as under-blocking.
+
+    With ``traces:`` a test passes only if **every** run gets the expected
+    verdict. The report's :attr:`PolicyTestReport.pass_k` and
+    :attr:`~PolicyTestReport.mean_k` then measure how consistently the agent
+    stays inside the contract, not just whether one run did.
     """
     from pactrun.loader import load_contract_dict
 
@@ -185,28 +233,37 @@ def run_contract_tests(path: str | Path) -> PolicyTestReport:
         name = str(test.get("name", f"test #{i}"))
         expected = _parse_expect(name, test.get("expect"))
 
-        if "trace" in test:
-            events = load_trace(path.parent / str(test["trace"]))
+        runs: list[tuple[str, list[Event]]]
+        if "traces" in test:
+            runs = [(p.name, load_trace(p)) for p in _trace_paths(name, test["traces"], path.parent)]
+        elif "trace" in test:
+            runs = [("", load_trace(path.parent / str(test["trace"])))]
         elif "events" in test:
             raw = test["events"]
             if not isinstance(raw, list):
                 raise ContractLoadError(f"Test {name!r}: 'events' must be a list")
-            events = [_event_from(e, f"test {name!r} event #{j}") for j, e in enumerate(raw, 1)]
+            runs = [("", [_event_from(e, f"test {name!r} event #{j}") for j, e in enumerate(raw, 1)])]
         else:
-            raise ContractLoadError(f"Test {name!r} needs a 'trace:' path or inline 'events:'")
+            raise ContractLoadError(f"Test {name!r} needs a 'trace:' path, 'traces:', or inline 'events:'")
 
-        result = replay_trace(contract, events)
-        violated = result.violated
-        passed = violated == expected
-        detail = ""
-        if not passed:
-            missing = sorted(set(expected) - set(violated))
-            extra = sorted(set(violated) - set(expected))
-            parts = []
-            if missing:
-                parts.append(f"expected but did not fire: {', '.join(missing)}")
-            if extra:
-                parts.append(f"fired unexpectedly: {', '.join(extra)}")
-            detail = "; ".join(parts)
-        report.results.append(PolicyTestResult(name, passed, expected, violated, detail))
+        violated_union: set[str] = set()
+        failures: list[str] = []
+        runs_passed = 0
+        for label, events in runs:
+            violated = replay_trace(contract, events).violated
+            violated_union.update(violated)
+            if violated == expected:
+                runs_passed += 1
+            else:
+                mismatch = _mismatch(expected, violated)
+                failures.append(f"{label}: {mismatch}" if len(runs) > 1 else mismatch)
+        report.results.append(PolicyTestResult(
+            name,
+            passed=runs_passed == len(runs),
+            expected=expected,
+            violated=sorted(violated_union),
+            detail="; ".join(failures),
+            runs=len(runs),
+            runs_passed=runs_passed,
+        ))
     return report

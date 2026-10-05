@@ -40,6 +40,13 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Added
 
+- `no_untrusted_memory_write` (OWASP ASI06): flags a memory-write tool call
+  that copies untrusted content (`mode="copy"`), or any memory write after
+  untrusted input (`mode="any"`), so injected text can't persist into later
+  runs.
+- Repeated runs in policy tests: a test's `traces:` (a list or a glob) replays
+  several runs of one task. The test passes only if every run gets the
+  expected verdict, and the report gives Pass^k and Mean@k.
 - Pydantic AI adapter: `PactrunCapability(contract)` plugs into
   `Agent(capabilities=[...])`, records model responses and tool calls, and
   stops a blocked tool before it runs. `on_tool_block="return_to_model"`

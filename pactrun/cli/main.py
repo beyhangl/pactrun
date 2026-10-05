@@ -242,6 +242,8 @@ def test_cmd(contract_path: Path) -> None:
 
     for r in report.results:
         want = "pass" if not r.expected else f"violated {r.expected}"
+        if r.runs > 1:
+            want += f", {r.runs_passed}/{r.runs} runs"
         if r.passed:
             console.print(f"[green]✓[/green] {r.name} [dim]({want})[/dim]")
         else:
@@ -249,6 +251,11 @@ def test_cmd(contract_path: Path) -> None:
 
     failed = sum(not r.passed for r in report.results)
     total = len(report.results)
+    if report.repeated:
+        console.print(
+            f"\nConsistency: Pass^k {total - failed}/{total} test(s) right on every run, "
+            f"Mean@k {report.mean_k:.0%} of runs right"
+        )
     if failed:
         console.print(f"\n[red]{failed} of {total} policy test(s) failed.[/red]")
         raise SystemExit(1)

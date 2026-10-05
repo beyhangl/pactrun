@@ -57,6 +57,23 @@ for a security property, read this first.
   is not flagged. `canary_not_leaked` reads the model output only, so a canary
   sent out through a tool argument is not seen; pair it with `no_secrets` on
   tool arguments or `untrusted_taint_to_sink`.
+- **`no_destructive_args` is a pattern list, not a SQL or shell parser.** It
+  catches chained shell commands (`ls; rm -rf /`, `$(...)`) because it matches
+  anywhere in the argument, but these all pass it:
+  - a delete inside a CTE: `WITH d AS (DELETE FROM users RETURNING *) SELECT * FROM d`
+  - a function with side effects: `SELECT purge_inactive_records()`
+  - a plain `DELETE FROM users` with no `WHERE`
+  - shell quoting that splits a word: `r''m -rf /`
+
+  A session flag such as `SET default_transaction_read_only` can be switched
+  back off by the same connection. If an agent must only read a database,
+  enforce it in the database: a read-only role or a connection the engine
+  locks read-only. Use pactrun's check as an extra tripwire on top of that,
+  not as the control.
+- **Memory checks only see this run.** `no_untrusted_memory_write` stops
+  untrusted text being saved within a run. It cannot tell that something read
+  from memory was poisoned in an earlier run unless the host tags memory reads
+  `metadata={"untrusted": True}`.
 - **The cost check in `wrap()` is a worst-case bound.** Completion tokens can't
   be known before a call, and reasoning models can exceed the estimate. The
   recorded cost after the call is the real one.

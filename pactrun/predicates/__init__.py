@@ -30,6 +30,7 @@ from pactrun.predicates.cost import cost_per_turn_under, cost_under, token_budge
 from pactrun.predicates.exfil import (
     lethal_trifecta_guard,
     no_exfiltration_after_untrusted,
+    no_untrusted_memory_write,
     untrusted_taint_to_sink,
 )
 from pactrun.predicates.flow import flow_progression
@@ -88,6 +89,7 @@ __all__ = [
     "multi_party_approval_required", "mint_approval_token",
     # Exfiltration / cross-run
     "no_exfiltration_after_untrusted", "lethal_trifecta_guard", "untrusted_taint_to_sink",
+    "no_untrusted_memory_write",
     # Compliance
     "ai_disclosure_in_output",
     # Supply chain

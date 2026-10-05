@@ -68,7 +68,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 | One-line `pactrun.wrap()` pre-call gate — real-tokenizer cost (tiktoken/litellm), **async + streaming** | EU AI Act / compliance document export |
 | Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
 | Session-level runtime enforcement (sync + async) | Native CrewAI tool events |
-| 53 built-in predicates (cost, **supply-chain**, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
+| 54 built-in predicates (cost, **supply-chain**, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
 | **Monitor (shadow) mode** — evaluate everything, record what *would* be blocked, enforce nothing | |
 | **Trace replay + policy tests** — record a run to JSONL, replay it against any contract, and pin expected verdicts in CI (`pactrun replay` / `pactrun test`) | |
@@ -416,6 +416,8 @@ All 3 policy test(s) passed.
 
 Exit codes are 0 (all pass), 1 (a test failed) and 2 (the contract, its tests, or a trace could not be loaded), so both commands can gate a CI job.
 
+An agent that stays inside the contract once may not do it again. Record several runs of the same task and point one test at all of them with `traces:` (a list, or a glob such as `traces: runs/refund/*.jsonl`). The test passes only if every run gets the expected verdict, and `pactrun test` adds a consistency line: Pass^k (tests right on every run) and Mean@k (share of runs right).
+
 ---
 
 ## OWASP Agentic Top-10 coverage
@@ -429,7 +431,7 @@ Predicates are tagged with the [OWASP Top 10 for Agentic Applications (2026)](ht
 | **ASI03** Identity & Privilege Abuse | `consent_token_required` · `multi_party_approval_required` · `tenant_response_isolation` · `no_secrets` · `lethal_trifecta_guard` |
 | **ASI04** Agentic Supply Chain | `tool_definitions_stable` — catches a tool server that mutates what it advertises mid-run |
 | **ASI05** Unexpected Code Execution | `no_destructive_args` · `tool_path_within` |
-| **ASI06** Memory & Context Poisoning | `untrusted_taint_to_sink` · `lethal_trifecta_guard` · `no_exfil_links` · `no_invisible_text` · `no_pii` · `no_secrets` |
+| **ASI06** Memory & Context Poisoning | `no_untrusted_memory_write` · `untrusted_taint_to_sink` · `lethal_trifecta_guard` · `no_exfil_links` · `no_invisible_text` · `no_pii` · `no_secrets` |
 | **ASI07** Insecure Inter-Agent Comms | `tool_host_within` |
 | **ASI08** Cascading Failures | `no_loops` · `bounded_error_retries` · `no_progress_stall` · `tool_error_rate_under` · cost/token/rate budgets |
 | **ASI09** Human-Agent Trust Exploitation | `consent_token_required` · `multi_party_approval_required` · `required_disclosure` · `ai_disclosure_in_output` · `approval_request_rate_under` |
@@ -445,7 +447,7 @@ A tag means the predicate is a **partial runtime control** for that risk — not
 
 ## Built-in predicates
 
-All 53 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
+All 54 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
 
 | Group | Predicate | What it checks |
 |---|---|---|
@@ -468,6 +470,7 @@ All 53 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or refe
 | **Injection / exfil** | `no_exfiltration_after_untrusted(untrusted_tools, exfil_tools, …)` | blocks an outbound call that fires *after* untrusted content entered the run |
 | | `lethal_trifecta_guard(untrusted_sources, private_data_tools, egress_tools, …)` | fails a run that combines untrusted input + private data + external egress |
 | | `untrusted_taint_to_sink(sink_tools, taint_key=, min_overlap=24, …)` | blocks a sink call whose args echo ≥N chars of prior taint-tagged content |
+| | `no_untrusted_memory_write(memory_tools, mode="copy", …)` | stops untrusted text being saved into long-term memory, where later runs would read it as fact (`mode="any"`: no memory write at all after untrusted input) |
 | | `no_invisible_text(scan, detect, …)` | flags zero-width / Unicode-Tags / bidi-override / variation-selector smuggled instructions |
 | | `no_exfil_links(allow_hosts=, block_images=True, …)` | output markdown/HTML links & images reach only allowed hosts (zero-click exfil) |
 | **Content security** | `no_injection_phrases(scan, decode=, min_confidence=, …)` | untrusted inbound text carries no known prompt-injection signatures (opt. base64/url decode) |
@@ -550,7 +553,7 @@ Installing pactrun adds a `pactrun` command:
 pactrun init --name support_agent      # scaffold contracts/support_agent.yaml
 pactrun validate contracts/            # validate one file or a whole directory
 pactrun show contracts/support_agent.yaml   # pretty-print a contract's clauses
-pactrun predicates                     # list the 53 built-in predicates
+pactrun predicates                     # list the 54 built-in predicates
 pactrun replay contracts/support_agent.yaml run.jsonl   # what would this contract have flagged?
 pactrun test contracts/support_agent.yaml               # run the contract's policy tests
 ```
@@ -588,7 +591,7 @@ pactrun is intentionally small, dependency-light, and framework-agnostic. It is 
 
 ## Roadmap
 
-Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`):
+Planned, **not yet implemented** (tracked in `docs/IMPLEMENTATION_PLAN.md`; the current priorities are in [docs/PLAN_2026-10.md](docs/PLAN_2026-10.md)):
 
 - **More adapters** — native CrewAI tool-event integration (today: OpenAI, Anthropic, Gemini, LangChain/LangGraph, LiteLLM/CrewAI, MCP, Pydantic AI, manual).
 - **Compliance export** — mapping contract specs to EU AI Act Annex IV / OWASP Agentic Top-10 evidence. (This produces *machine-readable inputs* to a technical file, not a complete compliance package.)
