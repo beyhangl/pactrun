@@ -61,7 +61,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **734 tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **812 tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
@@ -669,7 +669,7 @@ pactrun is a guardrail, so a bypass or a check that fails open is treated as a s
 git clone https://github.com/beyhangl/pactrun
 cd pactrun
 pip install -e ".[dev]"
-pytest        # 734 tests
+pytest        # 812 tests
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) — in particular, every security fix needs a test that **fails** without the fix. Please open an issue first for significant changes.
