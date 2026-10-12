@@ -86,12 +86,14 @@ class Session:
         self._mode = kwargs.get("mode") or getattr(contract, "mode", None) or "enforce"
         if self._mode not in ("enforce", "monitor"):
             raise ValueError(f"Session mode must be 'enforce' or 'monitor', got {self._mode!r}")
+        self._state.evaluation_mode = self._mode
         # "wall" measures elapsed time with the real clock. "event" measures it
         # from the events' own timestamps, so replaying a recorded trace judges
         # session_timeout by how long the ORIGINAL run took, not the replay.
         self._clock = kwargs.get("clock", "wall")
         if self._clock not in ("wall", "event"):
             raise ValueError(f"Session clock must be 'wall' or 'event', got {self._clock!r}")
+        self._state.evaluation_clock = self._clock
         self._first_event_ts: float | None = None
 
     # -- Properties --------------------------------------------------------
@@ -258,7 +260,6 @@ class Session:
 
     def advance_turn(self) -> list[Violation]:
         """Advance the turn counter."""
-        self._state.turn_number += 1
         event = Event(kind=EventKind.TURN_END)
         return self.record_event(event)
 
@@ -368,6 +369,9 @@ class Session:
         elif event.kind == EventKind.OUTPUT:
             if event.output:
                 self._state.output_history.append(str(event.output))
+
+        elif event.kind == EventKind.TURN_END:
+            self._state.turn_number += 1
 
         # Update elapsed time
         if self._clock == "event":

@@ -176,3 +176,193 @@ class TestWrapErrors:
     def test_unknown_client_raises(self):
         with pytest.raises(ValueError, match="OpenAI and Anthropic"):
             pactrun.wrap(object(), max_cost="$1.00")
+
+
+def test_responses_api_is_explicitly_refused():
+    from types import SimpleNamespace
+
+    calls = []
+    client = _FakeOpenAI([_OAIResp()])
+    client.responses = SimpleNamespace(create=lambda **kw: calls.append(kw))
+    g = pactrun.wrap(client, max_cost=0)
+    with pytest.raises(NotImplementedError, match="Responses API"):
+        g.responses.create(model="gpt-4.1", input="hello")
+    assert calls == []
+    assert g.session.state.total_llm_calls == 0
+
+
+def test_sync_inflight_reservations_prevent_concurrent_overspend(monkeypatch):
+    import importlib
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+
+    module = importlib.import_module("pactrun.wrap")
+    monkeypatch.setattr(module, "_estimate_worstcase_cost", lambda *a: (0.75, "test-estimate"))
+    monkeypatch.setattr(module, "_actual_cost", lambda *a: 0.25)
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        started.set()
+        assert release.wait(5)
+        return _OAIResp()
+
+    g = pactrun.wrap(SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))), max_cost=1)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(g.chat.completions.create, model="gpt-4.1")
+        try:
+            assert started.wait(5)
+            second = pool.submit(g.chat.completions.create, model="gpt-4.1")
+            with pytest.raises(ViolationError, match="pre-call"):
+                second.result(timeout=5)
+            assert len(calls) == 1
+        finally:
+            release.set()
+        first.result(timeout=5)
+    assert not g._reservations
+    assert g.session.state.total_cost_usd == 0.25
+    # Settlement replaces the pending estimate; it does not add both charges.
+    g.chat.completions.create(model="gpt-4.1")
+    assert g.session.state.total_cost_usd == 0.5
+    assert len(calls) == 2
+
+
+def test_provider_error_is_accounted_conservatively_and_preserved(monkeypatch):
+    import importlib
+    from types import SimpleNamespace
+
+    module = importlib.import_module("pactrun.wrap")
+    monkeypatch.setattr(module, "_estimate_worstcase_cost", lambda *a: (0.75, "test-estimate"))
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("provider outcome unknown")
+
+    g = pactrun.wrap(SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))), max_cost=1)
+    with pytest.raises(RuntimeError, match="provider outcome unknown"):
+        g.chat.completions.create(model="gpt-4.1")
+    assert not g._reservations
+    assert g.session.state.total_cost_usd == 0.75
+    assert g.session.state.total_llm_calls == 1
+    assert g.session.state.events[-1].metadata["cost_basis"] == "pre-call-estimate"
+    with pytest.raises(ViolationError, match="pre-call"):
+        g.chat.completions.create(model="gpt-4.1")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("estimate", [-1.0, float("nan"), float("inf")])
+def test_invalid_estimate_refuses_before_provider_call(monkeypatch, estimate):
+    import importlib
+
+    module = importlib.import_module("pactrun.wrap")
+    monkeypatch.setattr(module, "_estimate_worstcase_cost", lambda *a: (estimate, "test-estimate"))
+    client = _FakeOpenAI([_OAIResp()])
+    g = pactrun.wrap(client, max_cost=1)
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        g.chat.completions.create(model="gpt-4.1")
+    assert client.chat.completions.calls == 0
+
+
+def test_missing_response_usage_keeps_reserved_estimate(monkeypatch):
+    import importlib
+
+    module = importlib.import_module("pactrun.wrap")
+    monkeypatch.setattr(module, "_estimate_worstcase_cost", lambda *a: (0.75, "test-estimate"))
+    response = _OAIResp()
+    response.usage = None
+    g = pactrun.wrap(_FakeOpenAI([response]), max_cost=1)
+    g.chat.completions.create(model="gpt-4.1")
+    assert g.session.state.total_cost_usd == 0.75
+    assert not g._reservations
+    assert g.session.state.events[-1].metadata["usage_unavailable_reason"] == "response-usage-unavailable"
+    with pytest.raises(ViolationError, match="pre-call"):
+        g.chat.completions.create(model="gpt-4.1")
+
+
+def test_postcall_approval_uses_configured_handler(monkeypatch):
+    import importlib
+
+    module = importlib.import_module("pactrun.wrap")
+    monkeypatch.setattr(module, "_estimate_worstcase_cost", lambda *a: (0.75, "test-estimate"))
+    monkeypatch.setattr(module, "_actual_cost", lambda *a: 1.5)
+    approvals = []
+    g = pactrun.wrap(
+        _FakeOpenAI([_OAIResp()]), max_cost=1, on_violation="approve",
+        approval_handler=lambda violation: approvals.append(violation) or True,
+    )
+    response = g.chat.completions.create(model="gpt-4.1")
+    assert response.choices[0].message.content == "ok"
+    assert len(approvals) == 1
+    assert not g._reservations
+    assert g.session.state.total_cost_usd == 1.5
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+@pytest.mark.parametrize("shape", ["empty", "partial", "negative", "nan"])
+def test_incomplete_or_invalid_usage_never_refunds_reservation(monkeypatch, provider, shape):
+    import importlib
+    from types import SimpleNamespace as NS
+
+    module = importlib.import_module("pactrun.wrap")
+    monkeypatch.setattr(module, "_estimate_worstcase_cost", lambda *a: (0.75, "test-estimate"))
+    input_field, output_field = (
+        ("prompt_tokens", "completion_tokens") if provider == "openai" else ("input_tokens", "output_tokens")
+    )
+    fields = {} if shape == "empty" else {input_field: 0}
+    if shape in ("negative", "nan"):
+        fields.update({input_field: -1 if shape == "negative" else float("nan"), output_field: 0})
+    response = _OAIResp() if provider == "openai" else _AResp()
+    response.usage = NS(**fields)
+    client = _FakeOpenAI([response]) if provider == "openai" else _FakeAnthropic([response])
+    g = pactrun.wrap(client, max_cost=1)
+    create = g.chat.completions.create if provider == "openai" else g.messages.create
+    if shape in ("negative", "nan"):
+        with pytest.raises(ViolationError, match="Invalid provider accounting"):
+            create(model="gpt-4.1" if provider == "openai" else "claude-sonnet-4")
+        assert g.session.state.events[-1].metadata["pactrun.invalid_reported_usage"] == "reported-usage-invalid"
+    else:
+        create(model="gpt-4.1" if provider == "openai" else "claude-sonnet-4")
+    assert g.session.state.total_cost_usd == 0.75
+    assert not g._reservations
+    with pytest.raises(ViolationError, match="pre-call"):
+        create(model="gpt-4.1" if provider == "openai" else "claude-sonnet-4")
+
+
+@pytest.mark.parametrize("bad_cost", [-1.0, float("nan"), float("inf")])
+def test_invalid_priced_cost_retains_estimate_and_diagnostic(monkeypatch, bad_cost):
+    import importlib
+
+    module = importlib.import_module("pactrun.wrap")
+    monkeypatch.setattr(module, "_estimate_worstcase_cost", lambda *a: (0.75, "test-estimate"))
+    monkeypatch.setattr(module, "_actual_cost", lambda *a: bad_cost)
+    client = _FakeOpenAI([_OAIResp()])
+    g = pactrun.wrap(client, max_cost=1)
+    with pytest.raises(ViolationError, match="Invalid provider accounting"):
+        g.chat.completions.create(model="gpt-4.1")
+    event = g.session.state.events[-1]
+    assert event.metadata["reported_computed_cost"] == repr(bad_cost)
+    assert g.session.state.total_cost_usd == 0.75
+    assert not g._reservations
+    with pytest.raises(ViolationError, match="pre-call"):
+        g.chat.completions.create(model="gpt-4.1")
+    assert client.chat.completions.calls == 1
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+def test_explicit_zero_reported_usage_is_valid_not_missing(monkeypatch, provider):
+    import importlib
+
+    module = importlib.import_module("pactrun.wrap")
+    monkeypatch.setattr(module, "_estimate_worstcase_cost", lambda *a: (0.75, "test-estimate"))
+    client = _FakeOpenAI([_OAIResp(p=0, c=0)]) if provider == "openai" else _FakeAnthropic([_AResp(i=0, o=0)])
+    g = pactrun.wrap(client, max_cost=1)
+    create = g.chat.completions.create if provider == "openai" else g.messages.create
+    model = "gpt-4.1" if provider == "openai" else "claude-sonnet-4"
+    create(model=model)
+    create(model=model)
+    assert g.session.state.total_cost_usd == 0
+    assert g.session.state.total_llm_calls == 2
+    assert g.session.is_compliant

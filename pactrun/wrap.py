@@ -1,9 +1,10 @@
 """pactrun.wrap() — a one-line pre-call enforcement gate.
 
-Wrap an LLM client and every call is checked **before** it bills: pactrun
-estimates the worst-case cost of the next call (your prompt + the maximum
-output you allow) and refuses it if that would push your run over budget — and
-it enforces tool / loop / turn limits on the response before your code proceeds.
+Wrap an LLM client and supported calls are checked before dispatch: pactrun
+estimates input/tool-definition cost plus the assumed maximum output and
+reserves that amount against other in-flight calls on the same wrapper.
+Blocking mode refuses estimates over budget. Tool / loop / turn limits are
+checked on the response before your code proceeds.
 
     import openai, pactrun
 
@@ -21,23 +22,29 @@ the pre-call cost gate runs before the request, forbidden-tool/loop rules fire o
 the first tool-name delta (before your code can dispatch the tool), and real token
 usage is recorded from the final usage chunk.
 
-Honesty note: the pre-call cost check is a **worst-case bound** — you cannot know
-the real completion-token count before a call, and reasoning models (o3/o4) can
-spend hidden tokens beyond the visible estimate. The post-call check (on the real
-usage reported by the provider) is the exact backstop. Content already streamed to
-your code cannot be un-sent; a cancelled stream falls back to a worst-case cost
-record. ``wrap()`` supports the OpenAI and Anthropic client SDKs (sync + async)
-today; for other providers use the framework adapters with a ``Contract`` directly.
+Honesty note: this is an estimated budget, not a universal hard billing cap.
+Provider framing, media, pricing changes and hidden reasoning can exceed it.
+Callers must set a provider output limit; ``default_max_tokens`` supplies an
+estimate when no limit is sent. The post-call check records reported usage
+after billing. Content already streamed cannot be un-sent; missing usage,
+request errors and cancellation retain the pre-call estimate. Only OpenAI Chat
+Completions and Anthropic Messages create calls are wrapped (sync + async).
+OpenAI Responses is explicitly refused. See docs/wrapper-coverage.md.
 """
 
 from __future__ import annotations
 
+import inspect
+import logging
+import math
+import threading
 from typing import Any
 
 from pactrun.contract import Contract
+from pactrun.core.amounts import is_valid_amount
 from pactrun.core.enums import ClauseKind, OnFail, Severity
-from pactrun.core.models import Violation
-from pactrun.core.usage import TokenUsage
+from pactrun.core.models import Event, PredicateResult, SessionState, Violation
+from pactrun.core.usage import TokenUsage, read_field
 from pactrun.predicates import (
     cost_under,
     drift_bounds,
@@ -60,6 +67,17 @@ from pactrun.predicates import (
     tools_allowed as tools_allowed_predicate,
 )
 from pactrun.recovery.engine import apply_recovery
+
+logger = logging.getLogger("pactrun")
+_INVALID_REPORTED_USAGE = "pactrun.invalid_reported_usage"
+
+
+def _reported_usage_valid(event: Event, state: SessionState) -> PredicateResult:
+    diagnostic = event.metadata.get(_INVALID_REPORTED_USAGE)
+    return PredicateResult(
+        passed=not diagnostic, expected="valid reported usage and computed cost",
+        actual=diagnostic or "valid", message=f"Invalid provider accounting: {diagnostic}",
+    )
 
 
 def _parse_cost(value: Any) -> float | None:
@@ -101,6 +119,7 @@ def wrap(
     contract = Contract("pactrun.wrap").on_violation(on_violation)
     if budget is not None:
         contract.require(cost_under(budget))
+    contract.require(_reported_usage_valid, description="reported provider usage must be valid")
     if isinstance(max_turns, int):
         contract.require(max_turns_predicate(max_turns))
     if no_loops:
@@ -157,12 +176,18 @@ class GuardedClient:
     ) -> None:
         self._client = client
         self._contract = contract
-        self._session = contract.session()
+        self._session = contract.session(
+            escalation_handler=escalation_handler, approval_handler=approval_handler,
+        )
         self._budget = budget
         self._on_fail = on_fail
         self._max_tokens = default_max_tokens
         self._escalation_handler = escalation_handler
         self._approval_handler = approval_handler
+        # The provider call never holds this lock. Admission and settlement do,
+        # so another thread/task cannot spend a call's still-pending estimate.
+        self._budget_lock = threading.RLock()
+        self._reservations: dict[object, float] = {}
         self._kind, self._is_async = _detect_kind(client)
         guard = self._guard_async if self._is_async else self._guard
 
@@ -179,6 +204,12 @@ class GuardedClient:
             )
 
     def __getattr__(self, name: str) -> Any:
+        if name == "responses" and self._kind == "openai":
+            raise NotImplementedError(
+                "pactrun.wrap() does not cover OpenAI Responses API calls. "
+                "Use chat.completions.create or an explicitly instrumented adapter; "
+                "the underlying Responses client is not passed through."
+            )
         client = self.__dict__.get("_client")
         if client is None:
             raise AttributeError(name)
@@ -205,37 +236,54 @@ class GuardedClient:
 
     def _guard(self, real_create):
         def guarded(*args: Any, **kwargs: Any):
-            self._precall_cost_gate(kwargs)
+            reservation = self._precall_cost_gate(kwargs)
             if self._kind == "openai" and kwargs.get("stream"):
                 kwargs.setdefault("stream_options", {"include_usage": True})
-            response = real_create(*args, **kwargs)
-            return self._maybe_wrap_stream(kwargs, response)
+            try:
+                response = real_create(*args, **kwargs)
+            except BaseException:
+                self._settle_failed_call(reservation, kwargs)
+                raise
+            return self._maybe_wrap_stream(kwargs, response, reservation)
 
         return guarded
 
     def _guard_async(self, real_create):
         async def guarded(*args: Any, **kwargs: Any):
-            self._precall_cost_gate(kwargs)  # pure sync, no I/O
+            reservation = self._precall_cost_gate(kwargs)
             if self._kind == "openai" and kwargs.get("stream"):
                 kwargs.setdefault("stream_options", {"include_usage": True})
-            response = await real_create(*args, **kwargs)
-            return self._maybe_wrap_stream(kwargs, response)
+            try:
+                response = await real_create(*args, **kwargs)
+            except BaseException:
+                self._settle_failed_call(reservation, kwargs)
+                raise
+            return self._maybe_wrap_stream(kwargs, response, reservation)
 
         return guarded
 
-    def _maybe_wrap_stream(self, kwargs: dict, response: Any) -> Any:
+    def _maybe_wrap_stream(self, kwargs: dict, response: Any, reservation: object) -> Any:
         if kwargs.get("stream"):
-            return GuardedStream(response, self, kwargs)
-        self._record(kwargs, response)  # post-call: tokens, tools, loops, turns
+            return GuardedStream(response, self, kwargs, reservation)
+        with self._budget_lock:
+            estimate = self._reservations.pop(reservation)
+            self._record(kwargs, response, missing_usage_cost=estimate)
         return response
 
-    def _precall_cost_gate(self, kwargs: dict) -> None:
-        if self._budget is None:
-            return
+    def _precall_cost_gate(self, kwargs: dict) -> object:
         worst, tag = _estimate_worstcase_cost(kwargs, self._max_tokens)
-        projected = self._session.state.total_cost_usd + worst
-        if projected <= self._budget:
-            return
+        if not math.isfinite(worst) or worst < 0:
+            raise ValueError("The pre-call cost estimate must be finite and non-negative")
+        with self._budget_lock:
+            projected = self._session.state.total_cost_usd + sum(self._reservations.values()) + worst
+            if self._budget is not None and projected > self._budget:
+                self._handle_precall_violation(worst, tag, projected)
+            reservation = object()
+            self._reservations[reservation] = worst
+            return reservation
+
+    def _handle_precall_violation(self, worst: float, tag: str, projected: float) -> None:
+        assert self._budget is not None
         violation = Violation(
             clause_description="pre-call cost gate",
             kind=ClauseKind.REQUIRE,
@@ -255,39 +303,58 @@ class GuardedClient:
             approval_handler=self._approval_handler,
         )
 
-    def _record(self, kwargs: dict, response: Any) -> None:
+    def _settle_estimate(self, reservation: object, kwargs: dict, *, output: str = "", reason: str) -> None:
+        with self._budget_lock:
+            estimate = self._reservations.pop(reservation, None)
+            if estimate is None:
+                return
+            self._session.emit_llm_response(
+                model=kwargs.get("model", "unknown"), output=output, cost=estimate,
+                metadata={"cost_basis": "pre-call-estimate", "usage_unavailable_reason": reason},
+            )
+
+    def _settle_failed_call(self, reservation: object, kwargs: dict) -> None:
+        # A request failure/cancellation does not establish that the provider
+        # charged nothing. Keep its estimate and preserve the original error.
+        try:
+            self._settle_estimate(reservation, kwargs, reason="request-error-or-cancellation")
+        except Exception:
+            logger.exception("Policy evaluation failed while accounting for a failed request")
+
+    def _record(self, kwargs: dict, response: Any, *, missing_usage_cost: float = 0.0) -> None:
         if self._kind == "openai":
-            _record_openai(self._session, kwargs, response)
+            _record_openai(self._session, kwargs, response, missing_usage_cost=missing_usage_cost)
         elif self._kind == "anthropic":
-            _record_anthropic(self._session, kwargs, response)
+            _record_anthropic(self._session, kwargs, response, missing_usage_cost=missing_usage_cost)
 
 
 class GuardedStream:
     """Wraps a streaming response and enforces the contract as chunks arrive.
 
-    Honesty: content already streamed to your code cannot be un-sent. The hard
-    guarantees are the pre-call cost/bill gate and a tool block on the FIRST
-    delta of a forbidden tool's name (before your code can dispatch it). A
-    cancelled stream may never yield a final usage chunk, so its cost is then
-    recorded from the worst-case estimate rather than real usage.
+    Content already streamed cannot be un-sent. Admission reserves an estimate;
+    a complete forbidden tool name is blocked before its chunk is delivered.
+    A cancelled stream may lack final usage, so it retains the pre-call estimate.
     """
 
-    def __init__(self, stream: Any, owner: GuardedClient, kwargs: dict) -> None:
+    def __init__(self, stream: Any, owner: GuardedClient, kwargs: dict, reservation: object) -> None:
         self._stream = stream
         self._owner = owner
         self._session = owner._session
         self._kind = owner._kind
         self._kwargs = kwargs
+        self._reservation = reservation
         self._model = kwargs.get("model", "unknown")
         self._seen_tools: set[str] = set()
         self._content: list[str] = []
         self._usage: TokenUsage | None = None
+        self._usage_complete = False
         # Anthropic streams usage in two events: message_start (input + cache
         # counts, incl. the 1-hour split) and message_delta (cumulative output,
         # optionally cumulative input/cache counts).
         self._a_start_usage: Any = None
         self._a_delta_usage: Any = None
         self._recorded = False
+        self._closed = False
 
     # -- sync iteration / context manager ----------------------------------
 
@@ -298,27 +365,58 @@ class GuardedStream:
         try:
             chunk = next(self._stream)
         except StopIteration:
-            self._finalize(usage_seen=False)
+            self.close()
             raise
-        self._on_chunk(chunk)
+        except BaseException:
+            self._close_after_error()
+            raise
+        try:
+            self._on_chunk(chunk)
+        except BaseException:
+            self._close_after_error()
+            raise
         return chunk
 
     def __enter__(self) -> GuardedStream:
         enter = getattr(self._stream, "__enter__", None)
         if enter:
-            enter()
+            try:
+                enter()
+            except BaseException:
+                self._close_after_error()
+                raise
         return self
 
     def __exit__(self, *exc: Any) -> Any:
-        self._finalize(usage_seen=False)
-        exit_ = getattr(self._stream, "__exit__", None)
-        return exit_(*exc) if exit_ else None
+        result = None
+        try:
+            self._finalize(usage_seen=False)
+        finally:
+            self._closed = True
+            exit_ = getattr(self._stream, "__exit__", None)
+            if exit_:
+                result = exit_(*exc)
+            else:
+                close = getattr(self._stream, "close", None)
+                if close:
+                    close()
+        return result
 
     def close(self) -> None:
-        self._finalize(usage_seen=False)
-        close = getattr(self._stream, "close", None)
-        if close:
-            close()
+        try:
+            self._finalize(usage_seen=False)
+        finally:
+            if not self._closed:
+                self._closed = True
+                close = getattr(self._stream, "close", None)
+                if close:
+                    close()
+
+    def _close_after_error(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            logger.exception("Stream cleanup failed while preserving the original error")
 
     # -- async iteration / context manager ---------------------------------
 
@@ -329,27 +427,65 @@ class GuardedStream:
         try:
             chunk = await self._stream.__anext__()
         except StopAsyncIteration:
-            self._finalize(usage_seen=False)
+            await self.aclose()
             raise
-        self._on_chunk(chunk)
+        except BaseException:
+            await self._aclose_after_error()
+            raise
+        try:
+            self._on_chunk(chunk)
+        except BaseException:
+            await self._aclose_after_error()
+            raise
         return chunk
 
     async def __aenter__(self) -> GuardedStream:
         enter = getattr(self._stream, "__aenter__", None)
         if enter:
-            await enter()
+            try:
+                await enter()
+            except BaseException:
+                await self._aclose_after_error()
+                raise
         return self
 
     async def __aexit__(self, *exc: Any) -> Any:
-        self._finalize(usage_seen=False)
-        exit_ = getattr(self._stream, "__aexit__", None)
-        return await exit_(*exc) if exit_ else None
+        result = None
+        try:
+            self._finalize(usage_seen=False)
+        finally:
+            self._closed = True
+            exit_ = getattr(self._stream, "__aexit__", None)
+            if exit_:
+                result = await exit_(*exc)
+            else:
+                await self._close_upstream_async()
+        return result
 
     async def aclose(self) -> None:
-        self._finalize(usage_seen=False)
-        aclose = getattr(self._stream, "aclose", None)
-        if aclose:
-            await aclose()
+        try:
+            self._finalize(usage_seen=False)
+        finally:
+            if not self._closed:
+                self._closed = True
+                await self._close_upstream_async()
+
+    async def _close_upstream_async(self) -> None:
+        # OpenAI's async Stream exposes async close(), while other streams
+        # expose aclose(). Support both without delegating around accounting.
+        import inspect
+
+        close = getattr(self._stream, "aclose", None) or getattr(self._stream, "close", None)
+        if close:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
+    async def _aclose_after_error(self) -> None:
+        try:
+            await self.aclose()
+        except Exception:
+            logger.exception("Stream cleanup failed while preserving the original error")
 
     # -- chunk handling ----------------------------------------------------
 
@@ -374,6 +510,7 @@ class GuardedStream:
             from pactrun.adapters.openai import usage_from_openai
 
             self._usage = usage_from_openai(usage)
+            self._usage_complete = _usage_has_totals(usage, "openai")
             self._finalize(usage_seen=True)
 
     def _on_anthropic_chunk(self, chunk: Any) -> None:
@@ -395,29 +532,38 @@ class GuardedStream:
                 self._a_delta_usage = usage
                 self._usage = _merge_anthropic_stream_usage(self._a_start_usage, self._a_delta_usage)
         elif ctype == "message_stop":
+            self._usage_complete = (
+                _anthropic_stream_totals(self._a_start_usage, self._a_delta_usage)
+            )
             self._finalize(usage_seen=True)
 
     def _note_tool(self, name: Any) -> None:
         if name and name not in self._seen_tools:
             self._seen_tools.add(name)
-            self._session.emit_tool_call(name)  # raises on forbidden -> earliest block
+            with self._owner._budget_lock:
+                self._session.emit_tool_call(name)  # raises on forbidden -> earliest block
 
     def _finalize(self, usage_seen: bool) -> None:
-        if self._recorded:
-            return
-        self._recorded = True
-        output = "".join(self._content)
-        usage = self._usage
-        if usage_seen and usage is not None and (usage.prompt_tokens or usage.completion_tokens):
-            self._session.emit_llm_response(
-                model=self._model, output=output, cost=_actual_cost(self._model, usage),
-                **usage.event_kwargs(),
-            )
-        else:
-            # No usage chunk (e.g. a cancelled stream) — don't silently drop the
-            # cost; record the worst-case estimate instead.
-            worst, _ = _estimate_worstcase_cost(self._kwargs, self._owner._max_tokens)
-            self._session.emit_llm_response(model=self._model, output=output, cost=worst)
+        with self._owner._budget_lock:
+            if self._recorded:
+                return
+            self._recorded = True
+            output = "".join(self._content)
+            usage = self._usage
+            if usage_seen and usage is not None:
+                estimate = self._owner._reservations.pop(self._reservation)
+                cost, metadata = _accounted_usage(
+                    self._model, usage, available=self._usage_complete, estimate=estimate,
+                    unavailable_reason="stream-usage-incomplete",
+                )
+                self._session.emit_llm_response(
+                    model=self._model, output=output, cost=cost, metadata=metadata,
+                    **usage.event_kwargs(),
+                )
+            else:
+                self._owner._settle_estimate(
+                    self._reservation, self._kwargs, output=output, reason="stream-usage-unavailable",
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -428,13 +574,15 @@ def _detect_kind(client: Any) -> tuple[str, bool]:
     # AsyncOpenAI/AsyncAnthropic .create is NOT a coroutine function, so detect
     # async by the client class name (verified) — otherwise async clients run
     # the sync path and silently never await/record.
-    is_async = type(client).__name__.startswith("Async")
+    is_async = any(cls.__name__.startswith("Async") for cls in type(client).__mro__)
     chat = getattr(client, "chat", None)
-    if chat is not None and getattr(getattr(chat, "completions", None), "create", None):
-        return "openai", is_async
+    create = getattr(getattr(chat, "completions", None), "create", None)
+    if chat is not None and create:
+        return "openai", is_async or inspect.iscoroutinefunction(create)
     messages = getattr(client, "messages", None)
-    if messages is not None and getattr(messages, "create", None):
-        return "anthropic", is_async
+    create = getattr(messages, "create", None)
+    if messages is not None and create:
+        return "anthropic", is_async or inspect.iscoroutinefunction(create)
     return "unknown", is_async
 
 
@@ -463,11 +611,61 @@ def _estimate_worstcase_cost(kwargs: dict, default_max_tokens: int) -> tuple[flo
 # Post-call recording (mirrors the OpenAI / Anthropic adapters)
 # ---------------------------------------------------------------------------
 
-def _record_openai(session: Any, kwargs: dict, response: Any) -> None:
+def _usage_has_totals(raw: Any, kind: str) -> bool:
+    fields = ("prompt_tokens", "completion_tokens") if kind == "openai" else ("input_tokens", "output_tokens")
+    return all(read_field(raw, field) is not None for field in fields)
+
+
+def _anthropic_stream_totals(start: Any, delta: Any) -> bool:
+    def present(field: str) -> bool:
+        return read_field(delta, field) is not None or read_field(start, field) is not None
+
+    return present("input_tokens") and present("output_tokens")
+
+
+def _accounted_usage(
+    model: str, usage: TokenUsage, *, available: bool, estimate: float, unavailable_reason: str,
+) -> tuple[float, dict[str, Any]]:
+    """Trust only complete, valid usage with a valid priced amount.
+
+    Unknown/invalid accounting never frees its reserved budget. Invalid fields
+    remain on the event for ingestion diagnostics, and a wrapper clause routes
+    the invalid-report diagnostic through the configured recovery action.
+    """
+    invalid = None
+    computed = None
+    if not usage.is_valid():
+        reason = "reported-usage-invalid"
+        invalid = reason
+    elif not available:
+        reason = unavailable_reason
+    else:
+        computed = _actual_cost(model, usage)
+        if is_valid_amount(computed):
+            return computed, {}
+        reason = "computed-cost-invalid"
+        invalid = reason
+    metadata: dict[str, Any] = {
+        "cost_basis": "pre-call-estimate", "usage_unavailable_reason": reason,
+    }
+    if invalid:
+        metadata[_INVALID_REPORTED_USAGE] = invalid
+        metadata["reported_usage"] = {field: repr(value) for field, value in vars(usage).items()}
+        if computed is not None:
+            metadata["reported_computed_cost"] = repr(computed)
+    return estimate, metadata
+
+
+def _record_openai(session: Any, kwargs: dict, response: Any, *, missing_usage_cost: float = 0.0) -> None:
     from pactrun.adapters.openai import usage_from_openai
 
     model = getattr(response, "model", None) or kwargs.get("model", "unknown")
-    usage = usage_from_openai(getattr(response, "usage", None))
+    raw_usage = getattr(response, "usage", None)
+    usage = usage_from_openai(raw_usage)
+    cost, metadata = _accounted_usage(
+        model, usage, available=_usage_has_totals(raw_usage, "openai"), estimate=missing_usage_cost,
+        unavailable_reason="response-usage-unavailable" if raw_usage is None else "response-usage-incomplete",
+    )
 
     output = ""
     tool_names: list[tuple[str, dict]] = []
@@ -483,17 +681,24 @@ def _record_openai(session: Any, kwargs: dict, response: Any) -> None:
         pass
 
     session.emit_llm_response(
-        model=model, output=output, cost=_actual_cost(model, usage), **usage.event_kwargs(),
+        model=model, output=output,
+        cost=cost, metadata=metadata,
+        **usage.event_kwargs(),
     )
     for name, args in tool_names:
         session.emit_tool_call(name, args=args)
 
 
-def _record_anthropic(session: Any, kwargs: dict, response: Any) -> None:
+def _record_anthropic(session: Any, kwargs: dict, response: Any, *, missing_usage_cost: float = 0.0) -> None:
     from pactrun.adapters.anthropic import usage_from_anthropic
 
     model = getattr(response, "model", None) or kwargs.get("model", "unknown")
-    usage = usage_from_anthropic(getattr(response, "usage", None))
+    raw_usage = getattr(response, "usage", None)
+    usage = usage_from_anthropic(raw_usage)
+    cost, metadata = _accounted_usage(
+        model, usage, available=_usage_has_totals(raw_usage, "anthropic"), estimate=missing_usage_cost,
+        unavailable_reason="response-usage-unavailable" if raw_usage is None else "response-usage-incomplete",
+    )
 
     output = ""
     tool_calls: list[tuple[str, dict]] = []
@@ -507,7 +712,9 @@ def _record_anthropic(session: Any, kwargs: dict, response: Any) -> None:
         pass
 
     session.emit_llm_response(
-        model=model, output=output, cost=_actual_cost(model, usage), **usage.event_kwargs(),
+        model=model, output=output,
+        cost=cost, metadata=metadata,
+        **usage.event_kwargs(),
     )
     for name, args in tool_calls:
         session.emit_tool_call(name, args=args)

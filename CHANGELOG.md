@@ -12,6 +12,18 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Security
 
+- **BREAKING:** approval token envelopes use version 2; reissue older tokens.
+  Signatures now authenticate timestamps, nonces, exact actions/selected
+  arguments, approver IDs and optional host-owned context. Invalid/future
+  timestamps and altered context fail closed. SQLite replay stores atomically
+  consume grants/quorums across sessions and restarts. Monitor/replay never
+  consume the live store; enforcement freshness always uses wall time.
+- The wrapper refuses unsupported OpenAI Responses API access and reserves
+  estimated cost atomically across calls sharing one wrapper. Streams, missing
+  or invalid usage, failures and cancellation settle once, conservatively when
+  billed usage is unknown. Estimates include tool definitions and supported
+  system/tool-history text. SDK async subclasses retain async enforcement.
+
 - Prompt caching broke token and cost accounting in every adapter. Anthropic
   dropped cache reads and writes from the token total, so `token_budget`
   under-counted and cached runs looked cheap. OpenAI billed cached input at the
@@ -48,7 +60,21 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
   spellings, warns loudly when annotations can't load, and pins `mcp<3`.
   (`4e53a0a`)
 
+### Fixed
+
+- TURN_END events advance state on ingestion, so policy replay retains turn
+  limits instead of falsely passing them with a zero turn count.
+
 ### Added
+
+- Optional Evalcraft cassette bridge: normalized cache tiers, stable identities,
+  observed tool results/provenance, and monitor-mode policy replay. Missing
+  costs and ambiguous result relationships are refused by default.
+- Synthetic refund reference workflow and end-to-end tests for ownership,
+  signed approvals, concurrent attempts, restart recovery, uncertain provider
+  outcomes, cassette evidence and changed-code playback. No real payments or
+  model calls are made.
+- Application coverage, approval migration, bridge and contributor guides.
 
 - `no_untrusted_memory_write` (OWASP ASI06): flags a memory-write tool call
   that copies untrusted content (`mode="copy"`), or any memory write after

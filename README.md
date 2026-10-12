@@ -1,7 +1,7 @@
 <p align="center">
   <strong>pactrun</strong>
 </p>
-<p align="center"><strong>One line that refuses the call that would blow your AI agent's run</strong> — total cost, tool use, loops, drift — on the OpenAI/Anthropic SDKs or LangGraph/CrewAI.<br>Observability records what happened; pactrun refuses before it does.</p>
+<p align="center"><strong>Runtime contracts for your agent's covered calls and tool actions</strong> — estimated cost, tool use, approvals, loops and drift.<br>Test the policy offline, then enforce it at the application boundary.</p>
 
 [![Tests](https://github.com/beyhangl/pactrun/actions/workflows/test.yml/badge.svg)](https://github.com/beyhangl/pactrun/actions/workflows/test.yml)
 [![License](https://img.shields.io/github/license/beyhangl/pactrun)](LICENSE)
@@ -14,7 +14,7 @@
 
 Guardrails check individual **messages**. pactrun checks an agent's behavior across an entire **session** — enforcing limits on accumulated cost, tool usage, call ordering, loops, and drift, and raising (or recording) a violation the moment a contract is broken.
 
-**The one-liner — wrap any OpenAI/Anthropic client and every call is checked _before_ it bills:**
+**The one-liner — check supported OpenAI Chat Completions / Anthropic Messages calls before dispatch:**
 
 ```python
 import openai, pactrun
@@ -31,7 +31,7 @@ client.chat.completions.create(model="gpt-4.1", messages=[{"role": "user", "cont
 # raises ViolationError before billing if the worst-case cost would blow the run budget
 ```
 
-> The cost check is a **worst-case bound** — you can't know completion tokens before a call, and reasoning models can exceed the estimate. It's an in-process circuit-breaker *between* calls, not a proxy to deploy. Demo: [`examples/three_in_one.py`](examples/three_in_one.py).
+> The cost check reserves an **estimate** across concurrent calls sharing one wrapper. Provider charges, omitted output limits, media and token framing can exceed it. Unsupported Responses API access is explicitly refused; original clients and delegated/cloned clients remain outside coverage. See [coverage and settlement](docs/wrapper-coverage.md). Demo: [`examples/three_in_one.py`](examples/three_in_one.py).
 
 For full control — any provider, or a non-SDK agent loop — build a `Contract` and drive it yourself:
 
@@ -61,7 +61,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 
 ## Status
 
-> **pactrun is alpha (v0.1.0).** This README documents only what actually ships today. The core below works and is covered by **812 tests**. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
+> **pactrun is alpha (v0.1.0).** This README documents the implemented core and its offline test suite. A few capabilities that belong to the longer-term vision — compliance-document export, one more framework adapter, and formal composition — are **not built yet**; they live in the [Roadmap](#roadmap), not in the feature list.
 
 | Works today ✅ | Not built yet 🚧 (see Roadmap) |
 |---|---|
@@ -653,7 +653,22 @@ pactrun is the **runtime-enforcement** companion to [evalcraft](https://github.c
 | Question | "Did the agent behave correctly?" | "Is the agent behaving correctly right now?" |
 | How | Cassette replay + assertions | Contract enforcement + drift detection |
 
-They share design patterns (`contextvars`-based session tracking, the same dependency stack) and are intended to converge on a single contract artifact you can both test offline and enforce online.
+The optional [cassette bridge](docs/EVALCRAFT_BRIDGE.md) now exports Pactrun events
+to Evalcraft and evaluates recorded cassettes against contracts. It normalizes
+fresh versus total input tokens and preserves observed result annotations.
+Policy replay evaluates saved observations; Evalcraft playback reruns changed code.
+
+The [synthetic support-refund workflow](docs/SUPPORT_REFUND.md) combines bound
+approvals, durable grant consumption, host-owned identity, provider idempotency
+and uncertain-outcome reconciliation. Run it without API keys:
+
+```bash
+python examples/support_refund.py --output-dir /tmp/pactrun-refund
+```
+
+See [approval migration and limits](docs/APPROVAL_TOKENS.md) and
+[small contributor tasks](docs/CONTRIBUTOR_TASKS.md). Maintainer:
+[beyhangl](https://github.com/beyhangl), beyhangl@gmail.com.
 
 ---
 
@@ -669,7 +684,7 @@ pactrun is a guardrail, so a bypass or a check that fails open is treated as a s
 git clone https://github.com/beyhangl/pactrun
 cd pactrun
 pip install -e ".[dev]"
-pytest        # 812 tests
+pytest        # offline test suite
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) — in particular, every security fix needs a test that **fails** without the fix. Please open an issue first for significant changes.

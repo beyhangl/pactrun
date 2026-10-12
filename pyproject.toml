@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Beyhan Gul" },
+    { name = "beyhangl", email = "beyhangl@gmail.com" },
 ]
 keywords = ["ai", "agents", "contracts", "guardrails", "safety", "compliance", "drift", "enforcement"]
 classifiers = [

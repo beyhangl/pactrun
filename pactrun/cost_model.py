@@ -11,9 +11,10 @@ tell users how the number was obtained:
 - ``"heuristic-fallback"`` — the crude ``len // 4`` / static-table path
   (a library was missing or the model was unknown).
 
-Honesty note: a pre-call number is a worst-case **bound**, never an exact bill —
-you cannot know completion tokens before a call, and Anthropic/Gemini have no
-public tokenizer (litellm uses a BPE estimate that can differ from the provider).
+Honesty note: a pre-call number estimates input plus assumed maximum output;
+it is not a universal bound on the bill. Tokenization, provider framing, media,
+pricing and hidden reasoning can differ from these assumptions. Reported usage
+is priced after the call, with static-table fallback when live pricing is absent.
 
 Prompt caching: post-call costs price cache reads and writes at their own rates
 (``prompt_tokens`` is the total input, cache counts are subsets of it). The
@@ -26,6 +27,7 @@ below the real bill for such a call.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pactrun.core.usage import CacheRates, TokenUsage, lookup, price
@@ -73,28 +75,47 @@ _CACHE_RATES: dict[str, CacheRates] = {
 _DEFAULT_CACHE = CacheRates(read=1.0, write=1.25, write_1h=2.0)
 
 
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict):
+            continue
+        if isinstance(block.get("text"), str):
+            parts.append(block["text"])
+        elif block.get("type") == "tool_use":
+            parts.append(json.dumps({"name": block.get("name"), "input": block.get("input")}, ensure_ascii=False, default=str))
+        elif block.get("type") == "tool_result":
+            parts.append(_content_text(block.get("content")))
+    return " ".join(parts)
+
+
 def _normalize_messages(messages, system) -> list[dict]:
     msgs: list[dict] = []
-    if isinstance(system, str) and system:
-        msgs.append({"role": "system", "content": system})
+    system_text = _content_text(system)
+    if system_text:
+        msgs.append({"role": "system", "content": system_text})
     for message in messages or []:
         if not isinstance(message, dict):
             continue
         role = message.get("role", "user")
-        content = message.get("content")
-        if isinstance(content, str):
-            msgs.append({"role": role, "content": content})
-        elif isinstance(content, list):
-            text = " ".join(
-                b["text"] for b in content
-                if isinstance(b, dict) and isinstance(b.get("text"), str)
-            )
-            msgs.append({"role": role, "content": text})
+        text = _content_text(message.get("content"))
+        # Assistant tool-call history is billed input even with null content.
+        for field in ("tool_calls", "function_call"):
+            if message.get(field):
+                text += " " + json.dumps(message[field], ensure_ascii=False, default=str)
+        msgs.append({"role": role, "content": text})
     return msgs
 
 
-def _text_of(messages, system) -> str:
-    return " ".join(m["content"] for m in _normalize_messages(messages, system))
+def _text_of(messages, system, tools=None) -> str:
+    text = " ".join(m["content"] for m in _normalize_messages(messages, system))
+    if tools:
+        # Definitions (descriptions, JSON schemas, etc.) are billed input too.
+        # JSON is an estimate of their provider-specific wire representation.
+        text += " " + json.dumps(tools, sort_keys=True, ensure_ascii=False, default=str)
+    return text
 
 
 def _is_openai_model(model: str) -> bool:
@@ -103,7 +124,10 @@ def _is_openai_model(model: str) -> bool:
 
 
 def count_input_tokens(model, messages=None, *, tools=None, system=None) -> tuple[int, str]:
-    """Count the input tokens for a request. Returns ``(tokens, tag)``."""
+    """Estimate request text and tool-definition tokens. Returns ``(tokens, tag)``.
+
+    Provider framing and non-text media can add billed tokens beyond this count.
+    """
     model = model or ""
     # Non-OpenAI models: tiktoken (o200k_base) undercounts Claude by ~20-33%,
     # which would bias the budget gate toward letting over-budget calls
@@ -112,7 +136,8 @@ def count_input_tokens(model, messages=None, *, tools=None, system=None) -> tupl
         try:
             import litellm
 
-            n = litellm.token_counter(model=model, messages=_normalize_messages(messages, system))
+            kwargs = {"tools": tools} if tools else {}
+            n = litellm.token_counter(model=model, messages=_normalize_messages(messages, system), **kwargs)
             return int(n), ESTIMATED
         except Exception:
             pass
@@ -124,11 +149,11 @@ def count_input_tokens(model, messages=None, *, tools=None, system=None) -> tupl
                 enc = tiktoken.encoding_for_model(model)
             except KeyError:
                 enc = tiktoken.get_encoding("o200k_base")
-            return len(enc.encode(_text_of(messages, system))), ESTIMATED
+            return len(enc.encode(_text_of(messages, system, tools))), ESTIMATED
         except Exception:
             pass
     # Heuristic fallback (~4 chars/token).
-    return max(1, len(_text_of(messages, system)) // 4), HEURISTIC
+    return max(1, len(_text_of(messages, system, tools)) // 4), HEURISTIC
 
 
 def _static_price(model: str) -> tuple[float, float]:

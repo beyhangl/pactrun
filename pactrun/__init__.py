@@ -6,6 +6,7 @@ output, timing, and drift limits — and enforce them at runtime.
 
 __version__ = "0.1.0"
 
+from pactrun.approval_store import ApprovalReplayStore, SQLiteApprovalStore
 from pactrun.contract import Contract
 from pactrun.core.enums import ClauseKind, EventKind, OnFail, Severity
 from pactrun.core.errors import ContractLoadError, ViolationError
@@ -17,6 +18,7 @@ from pactrun.core.models import (
     SessionSummary,
     Violation,
 )
+from pactrun.integrations.evalcraft import EvalcraftRecorder, cassette_to_events, replay_cassette
 from pactrun.predicates import (
     ai_disclosure_in_output,
     approval_request_rate_under,
@@ -104,6 +106,8 @@ __all__ = [
     "webhook_handler", "cli_approver", "auto_approver", "digest",
     "Clause", "Event", "PredicateResult", "SessionState", "SessionSummary", "Violation",
     "Contract", "Session", "get_active_session", "wrap",
+    "ApprovalReplayStore", "SQLiteApprovalStore",
+    "EvalcraftRecorder", "cassette_to_events", "replay_cassette",
     "predicate", "get_predicate", "list_predicates",
     "load_trace", "replay_trace", "run_contract_tests",
     "ReplayResult", "PolicyTestReport", "TraceLoadError",

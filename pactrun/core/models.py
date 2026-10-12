@@ -137,6 +137,11 @@ class SessionState:
     elapsed_ms: float = 0.0
     events: list[Event] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    # Runtime-owned evaluation context; token/event metadata cannot select it.
+    evaluation_mode: str = "enforce"
+    evaluation_clock: str = "wall"
+    # Shadow-only nonce simulation, never a substitute for a durable store.
+    approval_nonces: set[str] = field(default_factory=set, repr=False)
 
     def to_dict(self) -> dict:
         return {
