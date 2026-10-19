@@ -26,10 +26,12 @@ not propagate to the callback, pass the session explicitly::
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from typing import Any
 
 from pactrun.adapters._base import get_session
-from pactrun.core.usage import CacheRates, TokenUsage, count, lookup, price, read_field, total
+from pactrun.core import pricing
+from pactrun.core.usage import TokenUsage, count, read_field, total
 
 try:
     from langchain_core.callbacks import BaseCallbackHandler
@@ -66,15 +68,17 @@ class PactrunCallbackHandler(BaseCallbackHandler):
         start = self._starts.pop(run_id, None)
         duration_ms = (time.monotonic() - start) * 1000 if start is not None else 0.0
 
-        model = (getattr(response, "llm_output", None) or {}).get("model_name") or "unknown"
+        model = _extract_model(response)
         output = _extract_text(response)
         usage = _extract_usage(response)
 
+        quote = pricing.cost(model, usage)
         session.emit_llm_response(
             model=model,
             output=output,
-            cost=_estimate_cost(model, usage),
+            cost=quote.usd,
             duration_ms=duration_ms,
+            metadata=quote.metadata or None,
             **usage.event_kwargs(),
         )
 
@@ -102,6 +106,18 @@ class PactrunCallbackHandler(BaseCallbackHandler):
 # Extraction helpers (robust across LangChain output shapes)
 # ---------------------------------------------------------------------------
 
+def _extract_model(response) -> str:
+    # An unknown model is priced at a ceiling, so also try the message's metadata.
+    name = (getattr(response, "llm_output", None) or {}).get("model_name")
+    if not name:
+        try:
+            metadata = getattr(response.generations[0][0].message, "response_metadata", None) or {}
+            name = metadata.get("model_name") or metadata.get("model")
+        except (AttributeError, IndexError, TypeError):
+            name = None
+    return name if isinstance(name, str) and name else "unknown"
+
+
 def _extract_text(response) -> str:
     try:
         return getattr(response.generations[0][0], "text", "") or ""
@@ -117,19 +133,26 @@ def _extract_usage(response) -> TokenUsage:
     input token types" (so it includes cache reads/writes) and ``output_tokens``
     likewise includes reasoning; ``input_token_details.cache_read`` /
     ``cache_creation`` and ``output_token_details.reasoning`` are subsets.
-    Falls back to the provider-raw ``llm_output`` usage dict.
+    Falls back to the provider-raw ``llm_output`` usage dict. Anthropic's
+    pricing modifiers (``speed``, ``inference_geo``) exist only in the raw
+    usage, which langchain-anthropic also puts in ``response_metadata``.
     """
     try:
         message = getattr(response.generations[0][0], "message", None)
     except (AttributeError, IndexError, TypeError):
         message = None
-    meta = getattr(message, "usage_metadata", None)
-    if meta:
-        return _from_usage_metadata(meta)
-
     llm_output = getattr(response, "llm_output", None) or {}
     raw = llm_output.get("token_usage") or llm_output.get("usage") or {}
-    return _from_raw_usage(raw)
+    meta = getattr(message, "usage_metadata", None)
+    if not meta:
+        return _from_raw_usage(raw)
+    usage = _from_usage_metadata(meta)
+    response_metadata = getattr(message, "response_metadata", None) or {}
+    for source in (raw, response_metadata.get("usage") if isinstance(response_metadata, dict) else None):
+        speed, geo = read_field(source, "speed"), read_field(source, "inference_geo")
+        if speed is not None or geo is not None:
+            return replace(usage, speed=speed, inference_geo=geo)
+    return usage
 
 
 def _from_usage_metadata(meta) -> TokenUsage:
@@ -175,51 +198,6 @@ def _from_raw_usage(raw) -> TokenUsage:
         cache_read_tokens=read,
         cache_write_tokens=write,
         cache_write_1h_tokens=count(read_field(raw.get("cache_creation"), "ephemeral_1h_input_tokens")),
+        speed=raw.get("speed"),
+        inference_geo=raw.get("inference_geo"),
     )
-
-
-# Best-effort pricing per 1M tokens (input, output) for common model families.
-# Unknown models fall back to 0.0 — pass a priced model name to get cost.
-_PRICING: dict[str, tuple[float, float]] = {
-    "gpt-5.4": (2.50, 15.00),
-    "gpt-4.1": (2.00, 8.00),
-    "gpt-4o": (2.50, 10.00),
-    "claude-opus-4": (15.00, 75.00),
-    "claude-sonnet-4": (3.00, 15.00),
-    "claude-haiku-4": (0.80, 4.00),
-    "gemini-2.5-pro": (1.25, 10.00),
-    "gemini-2.5-flash": (0.30, 2.50),
-    "gemini-2.0-flash": (0.10, 0.40),
-    "gemini-1.5-pro": (1.25, 5.00),
-    "gemini-1.5-flash": (0.075, 0.30),
-}
-
-
-# Cache multipliers on the base input price, same prefixes as _PRICING. Sources
-# (checked 2026-10-05) are the ones documented in the provider adapters:
-# OpenAI pricing page cached-input column (gpt-5.4 0.1x, gpt-4.1 0.25x,
-# gpt-4o 0.5x; no write charge before GPT-5.6), Anthropic pricing page (read
-# 0.1x, 5-minute write 1.25x, 1-hour write 2x), Gemini pricing page /
-# genai-prices 0.1.9 (2.5 Pro/Flash 0.1x, 2.0 Flash and 1.5 Flash 0.25x, 1.5 Pro
-# no published cached rate so 1.0x).
-_ANTHROPIC_CACHE = CacheRates(read=0.10, write=1.25, write_1h=2.0)
-_CACHE_RATES: dict[str, CacheRates] = {
-    "gpt-5.4": CacheRates(read=0.10),
-    "gpt-4.1": CacheRates(read=0.25),
-    "gpt-4o": CacheRates(read=0.50),
-    "claude-opus-4": _ANTHROPIC_CACHE,
-    "claude-sonnet-4": _ANTHROPIC_CACHE,
-    "claude-haiku-4": _ANTHROPIC_CACHE,
-    "gemini-2.5-pro": CacheRates(read=0.10),
-    "gemini-2.5-flash": CacheRates(read=0.10),
-    "gemini-2.0-flash": CacheRates(read=0.25),
-    "gemini-1.5-flash": CacheRates(read=0.25),
-}
-
-
-def _estimate_cost(model: str, usage: TokenUsage) -> float:
-    pricing = lookup(_PRICING, model)
-    if not pricing:
-        return 0.0
-    rates = lookup(_CACHE_RATES, model) or CacheRates()
-    return price(usage, pricing[0], pricing[1], rates)

@@ -25,11 +25,9 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 
 from pactrun.core.amounts import is_valid_amount
-
-T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -64,6 +62,10 @@ class TokenUsage:
     # Used for pricing only; not an Event field.
     cache_write_1h_tokens: Any = 0
     reasoning_tokens: Any = 0
+    # Anthropic pricing modifiers from the response usage (``speed`` "fast",
+    # ``inference_geo`` "us"). Used for pricing only; not Event fields.
+    speed: Any = None
+    inference_geo: Any = None
 
     def event_kwargs(self) -> dict[str, Any]:
         """Keyword arguments for ``Session.emit_llm_response``."""
@@ -143,12 +145,3 @@ def price(usage: TokenUsage, input_per_m: float, output_per_m: float, rates: Cac
     )
     return (input_cost + usage.completion_tokens * output_per_m) / 1_000_000
 
-
-def lookup(table: Mapping[str, T], model: str) -> T | None:
-    """Exact key, else the first key the model name starts with (table order)."""
-    if model in table:
-        return table[model]
-    for key, value in table.items():
-        if model.startswith(key):
-            return value
-    return None

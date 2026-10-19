@@ -12,6 +12,20 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Security
 
+- Model pricing under-counted, which lets spend pass `cost_under`. An
+  unknown model cost $0 in the adapters and $2.50 / $10 in the pre-call gate.
+  Lookup took the first prefix, so `gpt-5.4-pro` (30 / 180) was priced as
+  `gpt-5.4` (2.50 / 15), and `o3-pro` as `o3`. Several prices were stale
+  (`gpt-4.1-mini`, `o4-mini`, `claude-haiku-4-5`), and every Claude 4.7+ /
+  5.x, Gemini 3.x / 4 and GPT-5.5 / 5.6 / 6.x model was missing. All pricing
+  now comes from one table, `pactrun.core.pricing`, checked 2026-10-19
+  against the providers' pricing pages. Lookup normalises Bedrock, Vertex,
+  LiteLLM and `models/` names, strips date stamps, and takes the longest
+  prefix, refusing differently billed variants such as `-pro` or `-tts`. An
+  unknown model is priced at its provider's highest rate in the table,
+  flagged `cost_source="unknown_model"` and logged once. Long-context tiers,
+  Anthropic fast mode and US-only inference (+10%) are priced. The LiteLLM
+  adapter falls back to the table instead of $0.
 - The MCP adapter failed open three ways under `block_destructive`: it read
   only the first page of `tools/list`, so a destructive tool on page 2 was
   allowed; it read annotations once, so a tool re-annotated as destructive
@@ -78,6 +92,9 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Added
 
+- `pactrun.register_price(model, input, output, cache_read=, cache_write=)`
+  gives a fine-tuned, private or newly released model its real price instead
+  of the provider ceiling.
 - Session restore: `contract.session(restore_from=...)` rebuilds budgets,
   histories, turn counts and rate windows from a `TraceRecorder` file or a
   list of events, so a process restart no longer resets every budget to zero.
@@ -158,6 +175,16 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Changed
 
+- **BREAKING:** `pactrun.core.usage.lookup` is removed (use
+  `pactrun.core.pricing.find` / `cost`). Budgets set against the old,
+  under-counted prices trip earlier. An unknown OpenAI model is now priced at
+  the most expensive OpenAI rate ($150 / $600 per 1M tokens), so register a
+  price for any model the table lacks. `cost_model` prefers the table over
+  litellm's price map: "exact" / "estimated" mean a known price from either,
+  "heuristic-fallback" a rough token count or an unknown model.
+- Corrected prices: claude-opus-4-6 and Opus 4.5–4.8 (5 / 25, were 15 / 75),
+  gemini-2.5-flash-lite (0.10 / 0.40, was priced as 2.5 Flash), and the
+  Gemini 2.5 Pro over-200k tier.
 - OTel (experimental): `OTelObserver` emits an `invoke_agent` root span per
   session, with chat and tool spans as children (`emit_agent_span=False` keeps
   the old flat shape). Violations also emit `gen_ai.evaluation.result` span

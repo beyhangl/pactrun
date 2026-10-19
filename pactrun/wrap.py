@@ -604,6 +604,7 @@ def _estimate_worstcase_cost(kwargs: dict, default_max_tokens: int) -> tuple[flo
         model, kwargs.get("messages"), max_output,
         system=kwargs.get("system"), tools=kwargs.get("tools"),
         cache_control=kwargs.get("cache_control"),
+        speed=kwargs.get("speed"), inference_geo=kwargs.get("inference_geo"),
     )
 
 
@@ -642,11 +643,12 @@ def _accounted_usage(
     else:
         computed = _actual_cost(model, usage)
         if is_valid_amount(computed):
-            return computed, {}
+            return computed, _cost_metadata(model)
         reason = "computed-cost-invalid"
         invalid = reason
     metadata: dict[str, Any] = {
         "cost_basis": "pre-call-estimate", "usage_unavailable_reason": reason,
+        **_cost_metadata(model),
     }
     if invalid:
         metadata[_INVALID_REPORTED_USAGE] = invalid
@@ -758,6 +760,8 @@ def _merge_anthropic_stream_usage(start: Any, delta: Any) -> TokenUsage:
         cache_creation=read_field(start, "cache_creation"),
         output_tokens=pick("output_tokens"),
         output_tokens_details=pick("output_tokens_details"),
+        speed=pick("speed"),
+        inference_geo=pick("inference_geo"),
     )
     return usage_from_anthropic(merged)
 
@@ -772,4 +776,12 @@ def _actual_cost(model: str, usage: TokenUsage) -> float:
         cache_read_tokens=usage.cache_read_tokens,
         cache_write_tokens=usage.cache_write_tokens,
         cache_write_1h_tokens=usage.cache_write_1h_tokens,
+        speed=usage.speed,
+        inference_geo=usage.inference_geo,
     )[0]
+
+
+def _cost_metadata(model: str) -> dict[str, Any]:
+    from pactrun import cost_model
+
+    return cost_model.cost_metadata(model)

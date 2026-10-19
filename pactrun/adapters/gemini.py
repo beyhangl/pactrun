@@ -22,7 +22,8 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
-from pactrun.core.usage import CacheRates, TokenUsage, count, lookup, price, read_field, total
+from pactrun.core import pricing
+from pactrun.core.usage import TokenUsage, count, read_field, total
 
 
 class GeminiAdapter:
@@ -127,11 +128,13 @@ class GeminiAdapter:
         except Exception:
             output = ""
 
+        quote = pricing.cost(model, usage)
         session.emit_llm_response(
             model=model,
             output=output,
-            cost=_estimate_cost(model, usage),
+            cost=quote.usd,
             duration_ms=duration_ms,
+            metadata=quote.metadata or None,
             **usage.event_kwargs(),
         )
 
@@ -173,37 +176,3 @@ def usage_from_gemini(usage: Any) -> TokenUsage:
         cache_read_tokens=count(read_field(usage, "cached_content_token_count")),
         reasoning_tokens=thoughts,
     )
-
-
-# Best-effort pricing per 1M tokens (input, output) for common Gemini models.
-_PRICING: dict[str, tuple[float, float]] = {
-    "gemini-2.5-pro": (1.25, 10.00),
-    "gemini-2.5-flash": (0.30, 2.50),
-    "gemini-2.0-flash": (0.10, 0.40),
-    "gemini-1.5-pro": (1.25, 5.00),
-    "gemini-1.5-flash": (0.075, 0.30),
-}
-
-
-# Cached-input (context caching) multiplier on the base input price. Sources,
-# checked 2026-10-05: ai.google.dev/gemini-api/docs/pricing for 2.5 Pro
-# ($0.125 vs $1.25, prompts <= 200k) and 2.5 Flash ($0.03 vs $0.30); Google
-# no longer lists 2.0 Flash / 1.5, so those come from the genai-prices 0.1.9
-# snapshot (2.0 Flash $0.025 vs $0.10, 1.5 Flash $0.01875 vs $0.075).
-# genai-prices has no cached rate for 1.5 Pro, so it gets no discount (1.0x,
-# an over-estimate). Cache storage (per token-hour) is not per request and is
-# not priced here.
-_CACHE_RATES: dict[str, CacheRates] = {
-    "gemini-2.5-pro": CacheRates(read=0.10),
-    "gemini-2.5-flash": CacheRates(read=0.10),
-    "gemini-2.0-flash": CacheRates(read=0.25),
-    "gemini-1.5-flash": CacheRates(read=0.25),
-}
-
-
-def _estimate_cost(model: str, usage: TokenUsage) -> float:
-    pricing = lookup(_PRICING, model)
-    if not pricing:
-        return 0.0
-    rates = lookup(_CACHE_RATES, model) or CacheRates()
-    return price(usage, pricing[0], pricing[1], rates)

@@ -10,7 +10,8 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
-from pactrun.core.usage import CacheRates, TokenUsage, count, lookup, price, read_field, total
+from pactrun.core import pricing
+from pactrun.core.usage import TokenUsage, count, read_field, total
 
 
 class AnthropicAdapter:
@@ -116,11 +117,13 @@ class AnthropicAdapter:
         except (AttributeError, TypeError):
             pass
 
+        quote = pricing.cost(model, usage)
         session.emit_llm_response(
             model=model,
             output=output,
-            cost=_estimate_cost(model, usage),
+            cost=quote.usd,
             duration_ms=duration_ms,
+            metadata=quote.metadata or None,
             **usage.event_kwargs(),
         )
 
@@ -147,6 +150,8 @@ def usage_from_anthropic(usage: Any) -> TokenUsage:
     that went to the one-hour cache (absent on older SDKs: all writes are then
     priced at the five-minute rate). ``output_tokens`` already includes
     thinking; ``output_tokens_details.thinking_tokens`` is a subset of it.
+    ``speed`` ("fast") and ``inference_geo`` ("us") change the price
+    (anthropic-python ``types/usage.py``; absent on older SDKs).
     """
     if usage is None:
         return TokenUsage()
@@ -160,26 +165,6 @@ def usage_from_anthropic(usage: Any) -> TokenUsage:
         cache_write_tokens=write,
         cache_write_1h_tokens=count(read_field(breakdown, "ephemeral_1h_input_tokens")),
         reasoning_tokens=count(read_field(read_field(usage, "output_tokens_details"), "thinking_tokens")),
+        speed=read_field(usage, "speed"),
+        inference_geo=read_field(usage, "inference_geo"),
     )
-
-
-_PRICING: dict[str, tuple[float, float]] = {
-    "claude-opus-4-6": (15.00, 75.00),
-    "claude-sonnet-4-6": (3.00, 15.00),
-    "claude-haiku-4-5-20251001": (0.80, 4.00),
-}
-
-
-# Prompt-cache multipliers on the base input price, for every model above:
-# cache read (hit) 0.1x, 5-minute cache write 1.25x, 1-hour cache write 2x.
-# Source: platform.claude.com/docs/en/about-claude/pricing ("Prompt caching"
-# table), checked 2026-10-05. Exceptions there (Opus 5.5 reads 0.05x, Fable /
-# Mythos 5.1 reads 0.025x) are not in _PRICING, so they are not priced here.
-_CACHE_RATES = CacheRates(read=0.10, write=1.25, write_1h=2.0)
-
-
-def _estimate_cost(model: str, usage: TokenUsage) -> float:
-    pricing = lookup(_PRICING, model)
-    if not pricing:
-        return 0.0
-    return price(usage, pricing[0], pricing[1], _CACHE_RATES)

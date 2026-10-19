@@ -23,7 +23,8 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
-from pactrun.core.usage import CacheRates, TokenUsage, count, lookup, price, read_field
+from pactrun.core import pricing
+from pactrun.core.usage import TokenUsage, count, read_field
 
 
 class OpenAIAdapter:
@@ -127,7 +128,7 @@ class OpenAIAdapter:
         except (AttributeError, IndexError):
             pass
 
-        cost = _estimate_cost(model, usage)
+        quote = pricing.cost(model, usage)
 
         # Emit tool calls if present
         try:
@@ -146,8 +147,9 @@ class OpenAIAdapter:
         session.emit_llm_response(
             model=model,
             output=output,
-            cost=cost,
+            cost=quote.usd,
             duration_ms=duration_ms,
+            metadata=quote.metadata or None,
             **usage.event_kwargs(),
         )
 
@@ -186,42 +188,3 @@ def usage_from_openai(usage: Any) -> TokenUsage:
         cache_write_tokens=count(read_field(prompt_details, "cache_write_tokens")),
         reasoning_tokens=count(read_field(completion_details, "reasoning_tokens")),
     )
-
-
-# Pricing table (per 1M tokens)
-_PRICING: dict[str, tuple[float, float]] = {
-    "gpt-5.4": (2.50, 15.00),
-    "gpt-5.4-mini": (0.75, 4.50),
-    "gpt-5.4-nano": (0.20, 1.25),
-    "gpt-4.1": (2.00, 8.00),
-    "gpt-4.1-mini": (0.20, 0.80),
-    "gpt-4.1-nano": (0.10, 0.40),
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "o3": (2.00, 8.00),
-    "o4-mini": (0.55, 2.20),
-}
-
-
-# Cached-input multiplier on the base input price, per model family (same
-# prefix matching as _PRICING). Source: developers.openai.com/api/docs/pricing
-# Standard tier "Cached input" column divided by "Input", checked 2026-10-05:
-# gpt-5.4* $0.25/$2.50, gpt-4.1* $0.50/$2.00, gpt-4o* $1.25/$2.50,
-# o3 $0.50/$2.00, o4-mini $0.275/$1.10. Cache writes: the prompt-caching guide
-# says models before GPT-5.6 have no cache-write charge (write tokens bill as
-# ordinary input, 1.0x); none of the models above is GPT-5.6+.
-_CACHE_RATES: dict[str, CacheRates] = {
-    "gpt-5.4": CacheRates(read=0.10),
-    "gpt-4.1": CacheRates(read=0.25),
-    "gpt-4o": CacheRates(read=0.50),
-    "o3": CacheRates(read=0.25),
-    "o4-mini": CacheRates(read=0.25),
-}
-
-
-def _estimate_cost(model: str, usage: TokenUsage) -> float:
-    pricing = lookup(_PRICING, model)
-    if not pricing:
-        return 0.0
-    rates = lookup(_CACHE_RATES, model) or CacheRates()
-    return price(usage, pricing[0], pricing[1], rates)

@@ -18,6 +18,7 @@ from pactrun.core.models import (
     SessionSummary,
     Violation,
 )
+from pactrun.core.pricing import register_price
 from pactrun.integrations.evalcraft import EvalcraftRecorder, cassette_to_events, replay_cassette
 from pactrun.predicates import (
     ai_disclosure_in_output,
@@ -108,7 +109,7 @@ __all__ = [
     "EscalationError", "RetrySignal", "FallbackSignal",
     "webhook_handler", "cli_approver", "auto_approver", "digest",
     "Clause", "Event", "PredicateResult", "SessionState", "SessionSummary", "Violation",
-    "Contract", "Session", "get_active_session", "wrap",
+    "Contract", "Session", "get_active_session", "wrap", "register_price",
     "ApprovalReplayStore", "SQLiteApprovalStore",
     "EvalcraftRecorder", "cassette_to_events", "replay_cassette",
     "predicate", "get_predicate", "list_predicates",

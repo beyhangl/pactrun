@@ -2,6 +2,8 @@
 
 import builtins
 
+import pytest
+
 from pactrun import cost_model as cm
 
 
@@ -49,7 +51,11 @@ def test_heuristic_fallback_when_libs_absent(monkeypatch):
     assert tag == cm.HEURISTIC
     assert n == max(1, 40 // 4)
 
+    # Pricing comes from pactrun's own table, so a known model stays estimated.
     cost, ctag = cm.worstcase_cost("gpt-4o", 100, 1000)
+    assert ctag == cm.ESTIMATED
+    assert cost == pytest.approx((100 * 2.50 + 1000 * 10.00) / 1e6)
+    cost, ctag = cm.worstcase_cost("totally-made-up-model-xyz", 100, 1000)
     assert ctag == cm.HEURISTIC
     assert cost > 0
 
@@ -60,10 +66,10 @@ def test_worstcase_is_monotone_in_max_output():
     assert b >= a
 
 
-def test_actual_cost_is_exact_via_litellm():
+def test_actual_cost_of_known_model_is_exact():
     cost, tag = cm.actual_cost("gpt-4o", 1000, 500)
-    assert cost > 0
-    assert tag == (cm.EXACT if HAS_LITELLM else cm.HEURISTIC)
+    assert cost == pytest.approx((1000 * 2.50 + 500 * 10.00) / 1e6)
+    assert tag == cm.EXACT
 
 
 def test_unknown_model_falls_back_conservatively():

@@ -573,7 +573,7 @@ class TestWrapAndCostModel:
 
         monkeypatch.setattr(builtins, "__import__", no_litellm)
         cost, tag = cm.actual_cost("claude-sonnet-4-6", 102_000, 1_000, cache_read_tokens=100_000)
-        assert tag == cm.HEURISTIC
+        assert tag == cm.EXACT  # pactrun's own table, not a fallback
         assert cost == pytest.approx(0.051)
         cost, _ = cm.actual_cost("gpt-4.1", 102_000, 1_000, cache_read_tokens=100_000)
         assert cost == pytest.approx(0.062)

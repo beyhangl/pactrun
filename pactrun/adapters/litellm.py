@@ -30,6 +30,7 @@ import time
 from typing import Any
 
 from pactrun.adapters._base import get_session
+from pactrun.core import pricing
 from pactrun.core.usage import TokenUsage, count, read_field
 
 
@@ -128,11 +129,13 @@ class LiteLLMAdapter:
         except (AttributeError, IndexError, TypeError):
             pass
 
+        cost, metadata = _extract_cost(response, model, usage)
         session.emit_llm_response(
             model=model,
             output=output,
-            cost=_extract_cost(response),
+            cost=cost,
             duration_ms=duration_ms,
+            metadata=metadata,
             **usage.event_kwargs(),
         )
 
@@ -161,7 +164,8 @@ def usage_from_litellm(usage: Any) -> TokenUsage:
     ``cache_write_tokens`` (OpenAI). Verified against litellm 1.82.6
     (``types/utils.py``, ``llms/anthropic/chat/transformation.py``,
     ``llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py``).
-    Cost comes from LiteLLM itself, which prices the cache slices.
+    Cost comes from LiteLLM itself, which prices the cache slices; pactrun's
+    own table is used only when LiteLLM cannot price the response.
     """
     if usage is None:
         return TokenUsage()
@@ -190,18 +194,21 @@ def _parse_args(raw: Any) -> dict:
     return {}
 
 
-def _extract_cost(response: Any) -> float:
+def _extract_cost(response: Any, model: str, usage: TokenUsage) -> tuple[float, dict | None]:
     # LiteLLM stamps the computed cost on the response after a real call.
     hidden = getattr(response, "_hidden_params", None) or {}
     if isinstance(hidden, dict) and hidden.get("response_cost"):
         try:
-            return float(hidden["response_cost"])
+            return float(hidden["response_cost"]), None
         except (TypeError, ValueError):
             pass
     # Otherwise ask LiteLLM to price it from its bundled cost map.
     try:
         import litellm
 
-        return float(litellm.completion_cost(completion_response=response) or 0.0)
+        return float(litellm.completion_cost(completion_response=response) or 0.0), None
     except Exception:
-        return 0.0
+        pass
+    # LiteLLM cannot price it: pactrun's table, never a silent $0.
+    quote = pricing.cost(model, usage)
+    return quote.usd, quote.metadata or None

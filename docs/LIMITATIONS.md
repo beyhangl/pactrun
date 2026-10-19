@@ -74,6 +74,17 @@ for a security property, read this first.
   untrusted text being saved within a run. It cannot tell that something read
   from memory was poisoned in an earlier run unless the host tags memory reads
   `metadata={"untrusted": True}`.
+- **Prices come from one table, checked on a date.** `pactrun/core/pricing.py`
+  holds every model price, with its sources and the date it was checked. An
+  unknown model is priced at its provider's highest rate in the table, and
+  flagged `cost_source="unknown_model"`, so it can't slip under a budget.
+  Use `pactrun.register_price()` for a fine-tuned, private or new model.
+  These still under-count: OpenAI's priority tier, regional-endpoint
+  premiums on Bedrock and Vertex, Gemini audio input, and price rises the
+  providers have scheduled, until the table is updated. A new model whose
+  name extends a known one (say `claude-sonnet-5-7`) gets the known model's
+  price. The Pydantic AI adapter uses Pydantic AI's own pricing and records 0
+  when that can't price a model, so use `token_budget` there.
 - **The cost check in `wrap()` is a worst-case bound.** Completion tokens can't
   be known before a call, and reasoning models can exceed the estimate. The
   recorded cost after the call is the real one.
