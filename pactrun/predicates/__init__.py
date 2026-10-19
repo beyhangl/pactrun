@@ -72,6 +72,7 @@ from pactrun.predicates.tools import (
     tool_order,
     tools_allowed,
 )
+from pactrun.predicates.wallet import context_growth_under, max_steps_per_turn, tool_spend_under
 
 __all__ = [
     "predicate", "get_predicate", "list_predicates",
@@ -105,6 +106,7 @@ __all__ = [
     "bounded_error_retries", "no_redundant_reads", "no_progress_stall", "no_duplicate_side_effect",
     # Flow
     "flow_progression",
+    "context_growth_under", "max_steps_per_turn", "tool_spend_under",
     # Content security
     "no_injection_phrases", "canary_not_leaked", "mint_canary",
     # Rate limits

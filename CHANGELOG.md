@@ -67,6 +67,15 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Added
 
+- `context_growth_under` and `max_steps_per_turn` (OWASP ASI08) catch the
+  denial-of-wallet pattern where tool output piles up in the history and is
+  billed again on every later call: a cap on one prompt's size and on growth
+  against the run's first prompt, and a cap on model calls before the agent
+  returns to the user.
+- `tool_spend_under` (OWASP ASI02, ASI03) caps money moved through payment or
+  refund tools: per call, per run, one currency, a merchant allowlist and an
+  expiry. A missing, negative, NaN or non-numeric amount fails closed, so a
+  "negative refund" can't lower the running total.
 - Optional Evalcraft cassette bridge: normalized cache tiers, stable identities,
   observed tool results/provenance, and monitor-mode policy replay. Missing
   costs and ambiguous result relationships are refused by default.

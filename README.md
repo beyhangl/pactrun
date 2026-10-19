@@ -68,7 +68,7 @@ An agent can pass every per-message guardrail and still run up a $50 bill, loop 
 | One-line `pactrun.wrap()` pre-call gate — real-tokenizer cost (tiktoken/litellm), **async + streaming** | EU AI Act / compliance document export |
 | Fluent `Contract` builder + YAML loader | Pre-call gate for Gemini / LiteLLM clients (today: OpenAI, Anthropic) |
 | Session-level runtime enforcement (sync + async) | Native CrewAI tool events |
-| 54 built-in predicates (cost, **supply-chain**, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
+| 57 built-in predicates (cost, **runaway-cost**, **money moved by tools**, **supply-chain**, tools, **tool-args**, output, **schema/secrets**, timing, behavioral, **rate-limit**, **flow**, **injection/exfil**, **content-security**, **compliance**) | Formal multi-agent composition |
 | Recovery: log / warn / block / escalate / **approve** / retry / fallback | |
 | **Monitor (shadow) mode** — evaluate everything, record what *would* be blocked, enforce nothing | |
 | **Trace replay + policy tests** — record a run to JSONL, replay it against any contract, and pin expected verdicts in CI (`pactrun replay` / `pactrun test`) | |
@@ -427,13 +427,13 @@ Predicates are tagged with the [OWASP Top 10 for Agentic Applications (2026)](ht
 | Risk | Controls |
 |---|---|
 | **ASI01** Agent Goal Hijack | `no_injection_phrases` · `no_invisible_text` · `untrusted_taint_to_sink` · `no_exfiltration_after_untrusted` · `flow_progression` · `drift_bounds` · `canary_not_leaked` |
-| **ASI02** Tool Misuse & Exploitation | `tools_allowed` · `must_not_call` · `tool_args_match` · `no_destructive_args` · `tool_path_within` · `tool_arg_value_guard` · `tool_host_within` · `no_duplicate_side_effect` · rate/quota limits |
-| **ASI03** Identity & Privilege Abuse | `consent_token_required` · `multi_party_approval_required` · `tenant_response_isolation` · `no_secrets` · `lethal_trifecta_guard` |
+| **ASI02** Tool Misuse & Exploitation | `tools_allowed` · `must_not_call` · `tool_args_match` · `no_destructive_args` · `tool_path_within` · `tool_arg_value_guard` · `tool_host_within` · `no_duplicate_side_effect` · `tool_spend_under` · rate/quota limits |
+| **ASI03** Identity & Privilege Abuse | `consent_token_required` · `multi_party_approval_required` · `tenant_response_isolation` · `no_secrets` · `lethal_trifecta_guard` · `tool_spend_under` |
 | **ASI04** Agentic Supply Chain | `tool_definitions_stable` — catches a tool server that mutates what it advertises mid-run |
 | **ASI05** Unexpected Code Execution | `no_destructive_args` · `tool_path_within` |
 | **ASI06** Memory & Context Poisoning | `no_untrusted_memory_write` · `untrusted_taint_to_sink` · `lethal_trifecta_guard` · `no_exfil_links` · `no_invisible_text` · `no_pii` · `no_secrets` |
 | **ASI07** Insecure Inter-Agent Comms | `tool_host_within` |
-| **ASI08** Cascading Failures | `no_loops` · `bounded_error_retries` · `no_progress_stall` · `tool_error_rate_under` · cost/token/rate budgets |
+| **ASI08** Cascading Failures | `no_loops` · `bounded_error_retries` · `no_progress_stall` · `tool_error_rate_under` · `context_growth_under` · `max_steps_per_turn` · cost/token/rate budgets |
 | **ASI09** Human-Agent Trust Exploitation | `consent_token_required` · `multi_party_approval_required` · `required_disclosure` · `ai_disclosure_in_output` · `approval_request_rate_under` |
 | **ASI10** Rogue Agents | — *no runtime control* (identity/orchestration concern) |
 
@@ -447,13 +447,16 @@ A tag means the predicate is a **partial runtime control** for that risk — not
 
 ## Built-in predicates
 
-All 54 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
+All 57 ship today. Pass any of them to `.require(...)` / `.forbid(...)` (or reference them by name in YAML).
 
 | Group | Predicate | What it checks |
 |---|---|---|
 | **Cost** | `cost_under(max_usd)` | session total cost stays under budget |
 | | `cost_per_turn_under(max_usd)` | latest turn's cost under a limit |
 | | `token_budget(max_tokens)` | session total tokens under budget |
+| | `context_growth_under(max_prompt_tokens=, max_growth_ratio=)` | caps one prompt's size and how fast prompts grow in a run (tool output piling up in the history is billed again on every call) |
+| | `max_steps_per_turn(n)` | caps model calls before the agent hands control back to the user, which stops a tool-only loop |
+| | `tool_spend_under(tools, per_call=, per_session=, currency=, merchants=, expires_at=)` | caps money moved by payment or refund tools; a missing, negative or non-numeric amount fails closed |
 | **Tools** | `must_call(tool)` | tool was called by session end |
 | | `must_not_call(tool)` | tool is never called |
 | | `tool_order(expected, strict=False)` | tools called in a given order |
@@ -553,7 +556,7 @@ Installing pactrun adds a `pactrun` command:
 pactrun init --name support_agent      # scaffold contracts/support_agent.yaml
 pactrun validate contracts/            # validate one file or a whole directory
 pactrun show contracts/support_agent.yaml   # pretty-print a contract's clauses
-pactrun predicates                     # list the 54 built-in predicates
+pactrun predicates                     # list the 57 built-in predicates
 pactrun replay contracts/support_agent.yaml run.jsonl   # what would this contract have flagged?
 pactrun test contracts/support_agent.yaml               # run the contract's policy tests
 ```
