@@ -27,8 +27,8 @@ def test_llm_call_emits_gen_ai_span(pact_spans):
         s.emit_llm_response(
             model="gpt-4.1", output="hi", prompt_tokens=30, completion_tokens=12, cost=0.001
         )
-    spans = exporter.get_finished_spans()
-    assert len(spans) == 1
+    spans = [sp for sp in exporter.get_finished_spans() if sp.name.startswith("chat")]
+    assert len(spans) == 1  # plus the invoke_agent root
     span = spans[0]
     assert_gen_ai_span(span, name="chat gpt-4.1", model="gpt-4.1", has_violation=False)
     attrs = dict(span.attributes)

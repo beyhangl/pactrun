@@ -14,7 +14,7 @@ for a security property, read this first.
 | **A contract limit is NaN, infinite, or negative** | Rejected with `ValueError` when the contract is built. |
 | **An optional dependency is missing** (e.g. `jsonschema` for `tool_args_match` / `json_schema_valid`) | Detected on the first event the predicate evaluates, not when the contract loads, and handled like any raising predicate — a failed check. |
 | **Monitor mode** (`Contract(...).monitor()` or `session(mode="monitor")`) | Every clause is evaluated and violations are recorded with `enforced=False`, but **no recovery action runs**. Nothing is blocked. `is_compliant` still reports the violations honestly. |
-| **MCP adapter cannot load tool annotations** | A warning is logged. With `destructive_policy="hint"` nothing is blocked by annotation (there are no hints to act on); with `"strict"` every tool not marked read-only is blocked. Annotations are read once per session. |
+| **MCP adapter cannot load tool annotations** | A warning is logged. Under `block_destructive` (either policy) every call is blocked until a listing succeeds, and each call retries. With no blocking policy, calls pass with no annotations to act on. |
 
 ## What pactrun cannot see
 
@@ -82,7 +82,12 @@ for a security property, read this first.
   windows are only as honest as the timestamps you supply.
 - **`tool_definitions_stable` compares only what is recorded.** It can only
   catch a tool definition that changes if the host records the definition on
-  each call. The MCP adapter currently reads definitions once per session.
+  each call. The MCP adapter records the definition from its latest listing
+  on every call, and lists again only when the listing expires (`ttlMs`,
+  capped by `tool_cache_max_age`), after `invalidate_tools()`, or when a
+  called tool is missing. A change made inside that window is seen at the
+  next re-list. The adapter writes definitions under the default
+  `metadata_key="tool_definition"`, so set the predicate's key to match.
 
 ## What the audit log does and does not prove
 

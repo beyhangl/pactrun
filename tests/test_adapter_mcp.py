@@ -4,12 +4,18 @@ import pytest
 
 pytest.importorskip("mcp")
 
-from mcp.server.fastmcp import FastMCP
-from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import ToolAnnotations
+
+try:
+    from mcp.server.fastmcp import FastMCP
+    from mcp.shared.memory import create_connected_server_and_client_session
+except ImportError:  # SDK 2.x renamed FastMCP; the fake-session tests below still run
+    FastMCP = None
 
 from pactrun import Contract, ViolationError, must_not_call
 from pactrun.adapters import GuardedMCPSession
+
+needs_fastmcp = pytest.mark.skipif(FastMCP is None, reason="in-memory FastMCP server is SDK 1.x only")
 
 
 def _server() -> FastMCP:
@@ -26,6 +32,7 @@ def _server() -> FastMCP:
     return server
 
 
+@needs_fastmcp
 async def test_contract_blocks_forbidden_mcp_tool():
     contract = Contract("t").forbid(must_not_call("delete_file"))
     async with create_connected_server_and_client_session(_server()._mcp_server) as cs:
@@ -39,6 +46,7 @@ async def test_contract_blocks_forbidden_mcp_tool():
             await guarded.call_tool("delete_file", {"path": "a.txt"})
 
 
+@needs_fastmcp
 async def test_block_destructive_auto_denies():
     async with create_connected_server_and_client_session(_server()._mcp_server) as cs:
         guarded = GuardedMCPSession(cs, Contract("t"), block_destructive=True)
@@ -49,6 +57,7 @@ async def test_block_destructive_auto_denies():
             await guarded.call_tool("delete_file", {"path": "a.txt"})
 
 
+@needs_fastmcp
 async def test_graceful_error_result_when_not_block():
     contract = Contract("t").forbid(must_not_call("delete_file"))
     async with create_connected_server_and_client_session(_server()._mcp_server) as cs:
@@ -60,6 +69,7 @@ async def test_graceful_error_result_when_not_block():
         assert "pactrun blocked" in res.content[0].text
 
 
+@needs_fastmcp
 async def test_passthrough_list_tools():
     async with create_connected_server_and_client_session(_server()._mcp_server) as cs:
         guarded = GuardedMCPSession(cs, Contract("t"))
@@ -69,6 +79,7 @@ async def test_passthrough_list_tools():
         assert {"read_file", "delete_file"} <= names
 
 
+@needs_fastmcp
 async def test_strict_policy_blocks_unannotated():
     server = FastMCP("t2")
 
@@ -131,7 +142,7 @@ def test_hint_reads_camel_and_snake():
 async def test_annotations_parsed_for_both_sdk_spellings(destructive_ann, readonly_ann):
     session = _FakeSession([_tool("delete_all", **destructive_ann), _tool("read_file", **readonly_ann)])
     guarded = GuardedMCPSession(session, Contract("t"), block_destructive=True)
-    await guarded._load_annotations()
+    await guarded._refresh_tools()
 
     assert guarded._destructive == {"delete_all"}
     assert guarded._readonly == {"read_file"}
@@ -146,7 +157,7 @@ async def test_strict_policy_still_allows_readonly(ann):
     guarded = GuardedMCPSession(
         session, Contract("t"), block_destructive=True, destructive_policy="strict"
     )
-    await guarded._load_annotations()
+    await guarded._refresh_tools()
     # strict presumes unannotated tools destructive, but a read-only tool must pass.
     assert guarded._is_blocked_destructive("read_file") is False
     assert guarded._is_blocked_destructive("unknown_tool") is True
@@ -157,5 +168,5 @@ async def test_annotation_load_failure_warns_instead_of_silently_passing(caplog)
         _FakeSession([], fail=True), Contract("t"), block_destructive=True
     )
     with caplog.at_level("WARNING", logger="pactrun"):
-        await guarded._load_annotations()
+        await guarded._refresh_tools()
     assert any("could not load MCP tool annotations" in r.message for r in caplog.records)

@@ -212,6 +212,8 @@ await guarded.call_tool("delete_file", {"path": "a.txt"})  # raises ViolationErr
 
 `destructiveHint` is an advisory, possibly-untrusted hint, so `block_destructive` is defense-in-depth — pair it with an explicit `tools_allowed` for high assurance. (`pip install "pactrun[mcp]"`)
 
+The adapter follows `tools/list` pagination and lists the tools again when the listing expires (the server's `ttlMs`, capped by `tool_cache_max_age`, 60 seconds by default). Under `block_destructive`, a tool the server doesn't list is blocked. Each re-list is an extra round trip. To react to `notifications/tools/list_changed`, call `guarded.invalidate_tools()` from your session's `message_handler`. Every call records the tool's advertised definition, so `tool_definitions_stable()` catches a server that changes a tool mid-session.
+
 ### Pydantic AI
 
 Add pactrun as a Pydantic AI capability. Every model response and tool call in each run goes through the contract, and a blocked tool never runs:
@@ -239,7 +241,9 @@ with contract.session(observers=[OTelObserver()]) as session:
     ...
 ```
 
-Experimental — tracks the OpenTelemetry GenAI semantic conventions (Development status), pinned to v1.27. (`pip install "pactrun[otel]"`)
+Each session becomes an `invoke_agent` span (named after `agent_name=` or the contract) with `chat` and `execute_tool` child spans. Each violation also becomes a `gen_ai.evaluation.result` event, labelled `fail`, or `would_fail` in monitor mode. With a `meter_provider=` (or a global one) it records the GenAI token counters, cache and reasoning tokens included, the inference duration histogram, and agent and tool metrics. Pass `conversation_id=` to link runs, and `emit_llm_spans=False` if another instrumentation already traces your LLM calls.
+
+Experimental. It follows the unreleased OpenTelemetry GenAI semantic conventions (main `547934a`, 2026-10-18), so names may still change. (`pip install "pactrun[otel]"`)
 
 ### Tamper-evident audit log
 

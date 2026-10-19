@@ -12,6 +12,17 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Security
 
+- The MCP adapter failed open three ways under `block_destructive`: it read
+  only the first page of `tools/list`, so a destructive tool on page 2 was
+  allowed; it read annotations once, so a tool re-annotated as destructive
+  later was allowed; and a tool missing from the listing was allowed under the
+  `hint` policy. It now follows cursors (failing closed past
+  `max_tool_pages`), lists again when the listing expires (server `ttlMs`,
+  capped by the new `tool_cache_max_age`, default 60s), after
+  `invalidate_tools()`, and once for any unknown tool, and blocks a tool that
+  is still unlisted. A failed listing now blocks every call instead of none.
+  Each MCP tool call records the advertised definition in
+  `metadata["tool_definition"]`, so `tool_definitions_stable()` works with MCP.
 - **BREAKING:** approval token envelopes use version 2; reissue older tokens.
   Signatures now authenticate timestamps, nonces, exact actions/selected
   arguments, approver IDs and optional host-owned context. Invalid/future
@@ -147,6 +158,23 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Changed
 
+- OTel (experimental): `OTelObserver` emits an `invoke_agent` root span per
+  session, with chat and tool spans as children (`emit_agent_span=False` keeps
+  the old flat shape). Violations also emit `gen_ai.evaluation.result` span
+  events (`fail`, or `would_fail` in monitor mode); ERROR status and exception
+  events are unchanged. New metrics with a `meter_provider=`:
+  `gen_ai.client.inference.usage.*` (cache and reasoning included),
+  `gen_ai.client.inference.operation.{input,output}_tokens`,
+  `gen_ai.client.inference.duration`, `gen_ai.execute_tool.duration` and
+  `gen_ai.invoke_agent.{duration,inference_calls,tool_calls}`. New options:
+  `agent_name=`, `agent_id=`, `agent_description=`, `agent_version=`,
+  `conversation_id=`, `emit_llm_spans=`. `execute_tool` spans carry
+  `gen_ai.tool.call.id`, a chat span with no model is named `chat`, and failed
+  calls set `error.type`. Targets semantic-conventions-genai main `547934a`
+  (2026-10-18).
+- **BREAKING (MCP):** under `block_destructive`, a failed tool listing blocks
+  every call, and an unlisted tool is blocked. Re-listing adds round trips;
+  with `ttlMs=0` (the SDK 2.x server default) that is one per call.
 - **BREAKING:** `prompt_tokens`, `total_tokens`, `token_budget` and
   `gen_ai.usage.input_tokens` now count all input, including cached input. On
   Anthropic with a large cached prefix, existing token budgets trip much
