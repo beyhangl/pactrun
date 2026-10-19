@@ -128,6 +128,10 @@ def flow_progression(
     check = _diagnostic if mode == "diagnostic" else _gate
     check.predicate_name = "flow_progression"  # type: ignore[attr-defined]
     check._check_on = "session_end" if mode == "diagnostic" else "every_event"  # type: ignore[attr-defined]
+    if mode == "gate":
+        # A restored session replays the gate to rebuild its phase ledger and
+        # discards the results.
+        check._restore = _gate  # type: ignore[attr-defined]
     return check
 
 

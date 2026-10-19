@@ -46,6 +46,7 @@ class TraceRecorder:
     def __init__(self, path, *, redact_args=_DEFAULT_REDACT, append: bool = False) -> None:
         self.path = Path(path)
         self._redact = set(redact_args or ())
+        self.append = append
         if not append:
             self.path.write_text("", encoding="utf-8")
 

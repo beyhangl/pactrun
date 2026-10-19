@@ -386,6 +386,20 @@ pactrun replay contracts/stricter.yaml runs/2026-09-28.jsonl    # exit 0 complia
 pactrun replay contracts/stricter.yaml runs/2026-09-28.jsonl --json
 ```
 
+### Resuming after a restart
+
+Session state lives in memory, so a restarted worker would start every budget from zero. Record the run with `TraceRecorder` and restore from the same file:
+
+```python
+from pactrun.observability import TraceRecorder
+
+with contract.session(restore_from="run.jsonl",
+                      observers=[TraceRecorder("run.jsonl", append=True)]) as s:
+    ...  # budgets, histories and turn counts continue from the trace
+```
+
+Restored events update the totals without running checks again, re-running recovery, or calling observers, so the trace and audit log get no duplicates. A used approval grant stays used. Pass earlier violations with `restore_violations=`. Around a suspend, call `s.pause()` and `s.resume()` so `session_timeout` counts only active time.
+
 ### Policy tests
 
 A contract can carry its own tests. Each one is a recorded trace or a few inline events, plus the exact set of predicates you expect to fire. `pactrun test` fails when a clause stops catching what it should *and* when it starts flagging a run it should let through, so a loosened or over-tightened rule shows up in review instead of in production.

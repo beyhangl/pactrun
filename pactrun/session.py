@@ -10,14 +10,26 @@ Usage::
         session.emit_tool_call("search", args={"q": "help"})
 
     assert session.is_compliant
+
+Resume a run after a restart, with budgets continuing from the recorded trace::
+
+    with contract.session(restore_from="run.jsonl",
+                          observers=[TraceRecorder("run.jsonl", append=True)]) as session:
+        ...
 """
 
 from __future__ import annotations
 
 import contextvars
+import copy
+import dataclasses
 import logging
+import math
+import os
 import time
 import uuid
+from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from pactrun.core.amounts import (
@@ -95,6 +107,23 @@ class Session:
             raise ValueError(f"Session clock must be 'wall' or 'event', got {self._clock!r}")
         self._state.evaluation_clock = self._clock
         self._first_event_ts: float | None = None
+        self._paused_at: float | None = None
+        self._paused_s = 0.0
+        self._restored_elapsed_ms = 0.0
+        # Loaded now so a corrupt trace fails before the session opens. The
+        # events are applied to state in _start, without evaluation.
+        restore_from = kwargs.get("restore_from")
+        if isinstance(restore_from, (str, os.PathLike)):
+            _refuse_truncating_recorder(restore_from, self._observers)
+        self._pending_restore = _load_restore_events(restore_from)
+        self._violations.extend(_load_restored_violations(kwargs.get("restore_violations")))
+        elapsed = kwargs.get("restore_elapsed_ms")
+        if elapsed is not None:
+            if self._clock == "event":
+                raise ValueError("restore_elapsed_ms applies to the wall clock; the event clock uses timestamps")
+            if not is_valid_amount(elapsed):
+                raise ValueError(f"restore_elapsed_ms must be a finite number >= 0, got {elapsed!r}")
+        self._restore_elapsed_override: float | None = elapsed
 
     # -- Properties --------------------------------------------------------
 
@@ -126,6 +155,10 @@ class Session:
     def violation_count(self) -> int:
         return len(self._violations)
 
+    @property
+    def is_paused(self) -> bool:
+        return self._paused_at is not None
+
     # -- Context manager ---------------------------------------------------
 
     def __enter__(self) -> Session:
@@ -146,15 +179,17 @@ class Session:
 
     def _start(self) -> None:
         """Begin the session. Evaluates preconditions."""
-        self._started_at = time.time()
-        self._active = True
-        self._token = _active_session.set(self)
-
         # Seed session-scoped metadata into the shared state so predicates can
         # read run-level context (e.g. the active tenant set via
         # Session(metadata={...})). Existing state.metadata keys win.
         for key, value in (self._metadata or {}).items():
             self._state.metadata.setdefault(key, value)
+
+        self._apply_restored()
+
+        self._started_at = time.time()
+        self._active = True
+        self._token = _active_session.set(self)
 
         # Check preconditions
         dummy_event = Event(kind=EventKind.INPUT)
@@ -165,13 +200,14 @@ class Session:
 
     def _end(self) -> None:
         """End the session. Evaluates postconditions."""
+        self.resume()
         self._ended_at = time.time()
         if self._clock == "event":
             last = self._state.events[-1].timestamp if self._state.events else None
             if last is not None and self._first_event_ts is not None:
                 self._state.elapsed_ms = (last - self._first_event_ts) * 1000
         else:
-            self._state.elapsed_ms = (self._ended_at - self._started_at) * 1000
+            self._state.elapsed_ms = self._wall_elapsed_ms(self._ended_at)
 
         # Check postconditions and session-end clauses
         dummy_event = Event(kind=EventKind.OUTPUT)
@@ -191,6 +227,66 @@ class Session:
         if self._token is not None:
             _active_session.reset(self._token)
             self._token = None
+
+    def _apply_restored(self) -> None:
+        """Rebuild state from ``restore_from`` events as if they had been recorded.
+
+        Amounts are sanitized and totals, histories and turns updated exactly as
+        for a live event, but no clause is evaluated, no recovery runs and no
+        observer is notified: those events were already judged, recorded and
+        audited by the run that produced them. Predicates that keep their own
+        per-run state rebuild it through an optional ``_restore(event, state)``
+        hook.
+        """
+        events, self._pending_restore = self._pending_restore, []
+        if not events:
+            return
+        hooks = [
+            hook for clause in self._contract.get_clauses(check_on="every_event")
+            if (hook := getattr(clause.predicate, "_restore", None)) is not None
+        ]
+        for event in events:
+            self._sanitize_restored(event)
+            self._update_state(event)
+            self._state.events.append(event)
+            for hook in hooks:
+                hook(event, self._state)
+        if self._clock == "wall":
+            if self._restore_elapsed_override is not None:
+                self._restored_elapsed_ms = float(self._restore_elapsed_override)
+            else:
+                # A trace holds no pause marks, so this span counts any time the
+                # earlier run spent paused. Pass restore_elapsed_ms to override.
+                stamps = [e.timestamp for e in events]
+                self._restored_elapsed_ms = (max(stamps) - min(stamps)) * 1000
+            self._state.elapsed_ms = self._restored_elapsed_ms
+
+    # -- Wall clock --------------------------------------------------------
+
+    def pause(self) -> None:
+        """Stop the wall clock, e.g. while the agent is suspended.
+
+        Paused time is excluded from ``state.elapsed_ms`` and so from
+        ``session_timeout``. Recording an event resumes the clock, so a running
+        agent cannot hide behind a forgotten pause. The event clock and the
+        windowed rate limits read event timestamps and are not affected.
+        """
+        if not self._active:
+            raise RuntimeError("Only an active session can be paused")
+        if self._paused_at is None:
+            self._paused_at = time.time()
+
+    def resume(self) -> None:
+        """Restart the wall clock after :meth:`pause`. No-op if not paused."""
+        if self._paused_at is not None:
+            self._paused_s += max(0.0, time.time() - self._paused_at)
+            self._paused_at = None
+
+    def _wall_elapsed_ms(self, now: float) -> float:
+        paused = self._paused_s
+        if self._paused_at is not None:
+            paused += max(0.0, now - self._paused_at)
+        return self._restored_elapsed_ms + max(0.0, now - self._started_at - paused) * 1000
 
     # -- Event emission (user-facing API) ----------------------------------
 
@@ -270,6 +366,8 @@ class Session:
 
         This is the heart of the enforcement engine.
         """
+        self.resume()
+
         # Reject amounts that would corrupt budget arithmetic BEFORE anything
         # reads them, so totals, windowed rates, drift, telemetry and audit all
         # see the same sane value.
@@ -346,6 +444,22 @@ class Session:
         self._state.metadata[INVALID_AMOUNT_EVENTS_KEY] = count
         logger.warning("pactrun: rejected invalid amount(s) on event %s: %s", event.id, rejected)
 
+    def _sanitize_restored(self, event: Event) -> None:
+        """Sanitize a restored event, keeping rejections the original run recorded.
+
+        A TraceRecorder writes events after sanitizing, so a rejected amount
+        shows up as 0 plus the marker. It still counts as a rejected event.
+        """
+        earlier = event.metadata.get(INVALID_AMOUNTS_KEY)
+        counted = self._state.metadata.get(INVALID_AMOUNT_EVENTS_KEY, 0)
+        self._sanitize_amounts(event)
+        if not earlier:
+            return
+        if self._state.metadata.get(INVALID_AMOUNT_EVENTS_KEY, 0) == counted:
+            self._state.metadata[INVALID_AMOUNT_EVENTS_KEY] = counted + 1
+        elif isinstance(earlier, dict):
+            event.metadata[INVALID_AMOUNTS_KEY] = {**earlier, **event.metadata[INVALID_AMOUNTS_KEY]}
+
     def _update_state(self, event: Event) -> None:
         """Update cumulative session state from an event."""
         if event.kind == EventKind.LLM_CALL:
@@ -379,7 +493,7 @@ class Session:
                 self._first_event_ts = event.timestamp
             self._state.elapsed_ms = max(0.0, (event.timestamp - self._first_event_ts) * 1000)
         elif self._started_at:
-            self._state.elapsed_ms = (time.time() - self._started_at) * 1000
+            self._state.elapsed_ms = self._wall_elapsed_ms(time.time())
 
     def _record_violation(
         self,
@@ -450,3 +564,59 @@ class Session:
             is_compliant=self.is_compliant,
             metadata=self._metadata,
         )
+
+
+def _load_restore_events(source: Any) -> list[Event]:
+    """Events for ``restore_from``: a JSONL trace path or an iterable of events.
+
+    Event objects are shallow-copied so the caller's list is left untouched.
+    Raises :class:`~pactrun.replay.TraceLoadError` on anything malformed.
+    """
+    if source is None:
+        return []
+    from pactrun.replay import TraceLoadError, _event_from, load_trace
+
+    if isinstance(source, (str, os.PathLike)):
+        events = load_trace(Path(source))
+    elif isinstance(source, Iterable) and not isinstance(source, (bytes, dict)):
+        events = [
+            copy.copy(item) if isinstance(item, Event) else _event_from(item, f"restore_from event #{i}")
+            for i, item in enumerate(source, 1)
+        ]
+    else:
+        raise TypeError(f"restore_from must be a trace path or an iterable of events, got {type(source).__name__}")
+    for i, event in enumerate(events, 1):
+        ts = event.timestamp
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts):
+            raise TraceLoadError(f"restore_from event #{i}: timestamp must be a finite number, got {ts!r}")
+        if event.metadata is None:
+            event.metadata = {}
+        elif not isinstance(event.metadata, dict):
+            raise TraceLoadError(f"restore_from event #{i}: metadata must be a mapping")
+    return events
+
+
+def _refuse_truncating_recorder(path: str | os.PathLike, observers: list) -> None:
+    """Fail closed when a TraceRecorder without ``append=True`` emptied the trace."""
+    target = os.path.realpath(path)
+    for observer in observers:
+        own = getattr(observer, "path", None)
+        if getattr(observer, "append", True) is False and own is not None and os.path.realpath(own) == target:
+            raise ValueError(
+                f"A TraceRecorder for {os.fspath(path)!r} without append=True truncated the trace "
+                "being restored; budgets would restart at zero. Use TraceRecorder(..., append=True)."
+            )
+
+
+def _load_restored_violations(source: Any) -> list[Violation]:
+    if source is None:
+        return []
+    restored = []
+    for item in source:
+        if isinstance(item, Violation):
+            restored.append(dataclasses.replace(item, restored=True))
+        elif isinstance(item, dict):
+            restored.append(dataclasses.replace(Violation.from_dict(item), restored=True))
+        else:
+            raise TypeError(f"restore_violations items must be Violation or dict, got {type(item).__name__}")
+    return restored

@@ -67,6 +67,19 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Added
 
+- Session restore: `contract.session(restore_from=...)` rebuilds budgets,
+  histories, turn counts and rate windows from a `TraceRecorder` file or a
+  list of events, so a process restart no longer resets every budget to zero.
+  Restored events are not re-checked, recovery doesn't run, and observers
+  aren't called. `restore_violations=` carries earlier violations over
+  (marked `Violation.restored`), and `restore_elapsed_ms=` sets the restored
+  wall-clock time. Restoring never consumes an approval grant, and a grant
+  used before the restart stays used. A `TraceRecorder` without
+  `append=True` on the file being restored is refused, because it would empty
+  the trace before the restore reads it.
+- `Session.pause()` / `resume()` / `is_paused` leave suspended time out of
+  wall-clock `elapsed_ms` and `session_timeout`. Recording an event resumes
+  the clock.
 - `context_growth_under` and `max_steps_per_turn` (OWASP ASI08) catch the
   denial-of-wallet pattern where tool output piles up in the history and is
   billed again on every later call: a cap on one prompt's size and on growth

@@ -100,6 +100,26 @@ re-checks offline.
   compliance with any regulation. See the audit module's docstring for the EU
   AI Act specifics.
 
+## What a session restore does and does not carry over
+
+- A restore is only as trustworthy as the trace. Anyone who can edit or
+  truncate the trace file can lower the restored budgets. Keep traces in
+  storage the host controls, and pair them with `AuditLogObserver` if you need
+  tamper evidence.
+- Traces hold events, not violations. Earlier violations are lost unless you
+  pass them with `restore_violations=`.
+- A trace has no pause marks. Without `restore_elapsed_ms`, the restored
+  wall-clock time spans the restored events, including any time the earlier
+  run spent paused. That errs on the strict side.
+- Pausing doesn't change windowed rate limits, quotas or
+  `no_progress_stall(max_ms_without_progress=...)`. They read event
+  timestamps, so time spent suspended counts as real time.
+- Arguments `TraceRecorder` redacted come back redacted, so checks that
+  compare argument values across events (`no_redundant_reads`,
+  `no_duplicate_side_effect`, `per_key_rate_limit` on a redacted key) see the
+  redacted values.
+- `wrap()` doesn't accept `restore_from` yet.
+
 ## What a replay does and does not tell you
 
 `pactrun replay` and `pactrun test` evaluate the events in a trace file, nothing

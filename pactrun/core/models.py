@@ -241,6 +241,9 @@ class Violation:
     # False when recorded in monitor mode: the violation was detected but no
     # recovery action ran. Never present an unenforced result as enforcement.
     enforced: bool = True
+    # True when carried over by Session(restore_violations=...): it happened
+    # before a restart and this session never enforced it again.
+    restored: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -258,6 +261,7 @@ class Violation:
             "expected": self.expected,
             "actual": self.actual,
             "enforced": self.enforced,
+            "restored": self.restored,
         }
 
     @classmethod
@@ -277,6 +281,7 @@ class Violation:
             expected=data.get("expected"),
             actual=data.get("actual"),
             enforced=data.get("enforced", True),
+            restored=data.get("restored", False),
         )
 
 

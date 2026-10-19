@@ -86,6 +86,18 @@ def _consume(replay_store: ApprovalReplayStore, nonces: list[str], state: Sessio
     return True
 
 
+def _shadow_restore(check, replay_store):
+    """Session restore hook: rebuild the monitor-mode shadow nonces only.
+
+    In enforce mode the durable store already holds what the earlier run
+    consumed, so restoring does nothing and never consumes a grant again.
+    """
+    def restore(event: Event, state: SessionState) -> None:
+        if replay_store is not None and state.evaluation_mode == "monitor":
+            check(event, state)
+    return restore
+
+
 def _now(event: Event, state: SessionState) -> float:
     historical = state.evaluation_mode == "monitor" and state.evaluation_clock == "event"
     value = event.timestamp if historical else time.time()
@@ -157,6 +169,7 @@ def consent_token_required(
         )
 
     check.predicate_name = "consent_token_required"  # type: ignore[attr-defined]
+    check._restore = _shadow_restore(check, replay_store)  # type: ignore[attr-defined]
     return check
 
 
@@ -223,6 +236,7 @@ def multi_party_approval_required(
         )
 
     check.predicate_name = "multi_party_approval_required"  # type: ignore[attr-defined]
+    check._restore = _shadow_restore(check, replay_store)  # type: ignore[attr-defined]
     return check
 
 
