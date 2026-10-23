@@ -204,3 +204,87 @@ def test_live_and_replayed_turn_limits_agree(turns, compliant):
     assert replayed.summary.turn_count == turns
     assert session.is_compliant == compliant
     assert replayed.compliant == compliant
+
+
+def _scenario_cassette():
+    from evalcraft.scenarios import run_scenario
+
+    from pactrun.scenarios import refund_environment, refund_scenarios
+
+    return run_scenario(refund_scenarios()[0], refund_environment).cassette
+
+
+def test_stateful_annotations_preserve_actual_policy_events_and_tool_counts():
+    from evalcraft.scenarios import run_scenarios
+
+    from pactrun.scenarios import refund_environment, refund_scenarios
+
+    suite = run_scenarios(refund_scenarios(), refund_environment)
+    assert suite.passed
+    for case in suite.cases:
+        before = deepcopy(case.cassette.to_dict())
+        events = cassette_to_events(case.cassette)
+        attempts = case.cassette.get_tool_calls()
+        assert sum(event.kind == EventKind.TOOL_CALL for event in events) == len(attempts)
+        assert {span.id for span in attempts}.issubset({event.id for event in events})
+        assert all("evalcraft_scenario" not in event.metadata for event in events)
+        replayed = replay_cassette(Contract("tool-count").require(max_tool_calls(0)), case.cassette)
+        assert replayed.compliant == (not attempts)
+        assert case.cassette.to_dict() == before
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_owner", "future_owner", "boolean_owner", "future_marker", "boolean_step",
+    "unknown_event", "tool_evidence", "model_evidence", "unknown_metadata", "wrong_name",
+    "missing_parent", "duplicate_outcome", "missing_outcome",
+])
+def test_invalid_scenario_annotations_cannot_silently_hide_evidence(mutation):
+    cassette = _scenario_cassette()
+    span = cassette.spans[0]
+    if mutation == "missing_owner":
+        cassette.metadata.pop("evalcraft_scenario")
+    elif mutation == "future_owner":
+        cassette.metadata["evalcraft_scenario"]["version"] = 2
+    elif mutation == "boolean_owner":
+        cassette.metadata["evalcraft_scenario"]["version"] = True
+    elif mutation == "future_marker":
+        span.metadata["evalcraft_scenario"]["version"] = 2
+    elif mutation == "boolean_step":
+        span.metadata["evalcraft_scenario"]["step"] = True
+    elif mutation == "unknown_event":
+        span.metadata["evalcraft_scenario"]["event"] = "execute_tool"
+    elif mutation == "tool_evidence":
+        span.tool_name, span.tool_args = "refund", {"amount_minor": 2500}
+    elif mutation == "model_evidence":
+        span.cost_usd = 0.5
+    elif mutation == "unknown_metadata":
+        span.metadata["pactrun_bridge"] = {"event_kind": "tool_call"}
+    elif mutation == "wrong_name":
+        span.name = "unrecognized"
+    elif mutation == "missing_parent":
+        cassette.spans[1].parent_id = "missing"
+    elif mutation == "duplicate_outcome":
+        duplicate = deepcopy(cassette.spans[1])
+        duplicate.id = "duplicate-outcome"
+        cassette.spans.insert(2, duplicate)
+    elif mutation == "missing_outcome":
+        cassette.spans.pop(1)
+    with pytest.raises(ValueError, match="scenario"):
+        cassette_to_events(cassette)
+
+
+def test_scenario_markers_never_omit_real_tool_or_model_spans():
+    cassette = _scenario_cassette()
+    cassette.spans.append(Span(
+        kind=SpanKind.TOOL_CALL, tool_name="external_action",
+        metadata={"evalcraft_scenario": {"version": 1}},
+    ))
+    cassette.spans.append(Span(
+        kind=SpanKind.LLM_RESPONSE, cost_usd=0.25,
+        metadata={"evalcraft_scenario": {"version": 1}},
+    ))
+    events = cassette_to_events(cassette)
+    assert events[-2].tool_name == "external_action"
+    assert events[-1].cost_usd == 0.25
+    with pytest.raises(ValueError, match="Unsupported cassette span kind"):
+        cassette_to_events(Cassette(spans=[Span(kind=SpanKind.AGENT_STEP)]))

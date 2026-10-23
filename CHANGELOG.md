@@ -92,6 +92,18 @@ pactrun has not yet been published to PyPI; everything below is unreleased.
 
 ### Added
 
+- Reusable synthetic refund scenarios: `pactrun.scenarios.refund_scenarios`,
+  `refund_environment`, and `RefundScenarioEnvironment` execute the extracted
+  refund workflow against Evalcraft's independent stateful-scenario assertions.
+  The 26-case pack covers amount/ownership rules, bound approvals, same-grant
+  and distinct-grant concurrency, restart, provider timeouts, and missing,
+  mismatched, or malformed evidence. `examples/refund_scenarios.py` supports
+  listing/selecting cases and fresh-directory report/cassette output without
+  model keys or real payments. Matching source checkouts are required until
+  releases contain the new API.
+- The cassette bridge recognizes strictly validated version 1 informational
+  scenario envelopes without treating attempted actions as tool execution;
+  actual supported tool/SDK spans preserve their normal conversion.
 - `pactrun.register_price(model, input, output, cache_read=, cache_write=)`
   gives a fine-tuned, private or newly released model its real price instead
   of the provider ceiling.

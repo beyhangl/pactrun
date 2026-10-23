@@ -16,11 +16,12 @@ from pactrun.core.models import Event, SessionState
 from pactrun.replay import ReplayResult, replay_trace
 
 if TYPE_CHECKING:
-    from evalcraft.core.models import Cassette
+    from evalcraft.core.models import Cassette, Span
 
     from pactrun.contract import Contract
 
 _BRIDGE_KEY = "pactrun_bridge"
+_SCENARIO_KEY = "evalcraft_scenario"
 
 
 def _models():
@@ -29,6 +30,63 @@ def _models():
     except ImportError as exc:
         raise ImportError("Install pactrun[evalcraft] to use the cassette bridge.") from exc
     return Cassette, Span, SpanKind, TokenUsage
+
+
+def _scenario_annotation(
+    recording: Cassette, span: Span, attempts: dict[str, tuple[int, str]], outcomes: set[str],
+) -> None:
+    """Validate an owned orchestration annotation before omitting it from policy replay.
+
+    Scenario steps are test-host operations. They must never become tool calls,
+    and a marker must never hide tool/model evidence or unknown span formats.
+    This recognizes a format; it does not authenticate cassette provenance.
+    """
+    owner = recording.metadata.get(_SCENARIO_KEY)
+    marker = span.metadata[_SCENARIO_KEY]
+    valid_owner = (
+        isinstance(owner, dict) and set(owner) == {"version"}
+        and type(owner["version"]) is int and owner["version"] == 1
+    )
+    if not valid_owner or not isinstance(marker, dict):
+        raise ValueError("Unsupported scenario annotation owner or marker")
+    version, step, action = marker.get("version"), marker.get("step"), marker.get("action")
+    if (
+        type(version) is not int or version != 1 or type(step) is not int or step < 0
+        or not isinstance(action, str) or not action.strip()
+        or any(value is not None for value in (
+            span.tool_name, span.tool_args, span.tool_result,
+            span.model, span.token_usage, span.cost_usd,
+        ))
+    ):
+        raise ValueError("Invalid scenario annotation or embedded tool/model evidence")
+    event = marker.get("event")
+    common = {"version", "step", "action", "event"}
+    if event == "action_attempt":
+        if (
+            set(marker) != common | {"fault"} or set(span.metadata) != {_SCENARIO_KEY}
+            or marker["fault"] is not None and not isinstance(marker["fault"], str)
+            or span.name != action or span.parent_id is not None
+            or not isinstance(span.input, dict) or span.output is not None or span.error is not None
+            or step in (item[0] for item in attempts.values())
+        ):
+            raise ValueError("Invalid scenario action attempt annotation")
+        attempts[span.id] = (step, action)
+    elif event == "action_outcome":
+        if (
+            set(marker) != common | {"status"}
+            or marker["status"] not in ("succeeded", "blocked", "unknown", "error")
+            or set(span.metadata) != {_SCENARIO_KEY, "before", "after", "passed"}
+            or not isinstance(span.metadata["before"], dict)
+            or span.metadata["after"] is not None and not isinstance(span.metadata["after"], dict)
+            or type(span.metadata["passed"]) is not bool
+            or span.name != f"{action}.outcome" or span.input is not None
+            or attempts.get(span.parent_id or "") != (step, action)
+            or span.parent_id in outcomes
+        ):
+            raise ValueError("Invalid scenario action outcome annotation")
+        outcomes.add(span.parent_id or "")
+    else:
+        raise ValueError("Unsupported scenario annotation event")
 
 
 def cassette_to_events(
@@ -43,6 +101,8 @@ def cassette_to_events(
     metadata.tool_call_id. Conflicting result annotations and interleaved
     results are refused rather than inventing a causal/trust relationship.
     Unreported LLM cost is an error unless missing_cost="zero" is explicit.
+    Versioned stateful-scenario annotations are validated and omitted; actual
+    tool/model spans inside each step are converted normally.
     """
     if missing_cost not in ("error", "zero"):
         raise ValueError("missing_cost must be 'error' or 'zero'")
@@ -56,10 +116,15 @@ def cassette_to_events(
     tool_calls: dict[str, Event] = {}
     seen_ids: set[str] = set()
     result_calls: set[str] = set()
+    scenario_attempts: dict[str, tuple[int, str]] = {}
+    scenario_outcomes: set[str] = set()
     for span in recording.spans:
         if span.id in seen_ids:
             raise ValueError(f"Duplicate cassette span id: {span.id!r}")
         seen_ids.add(span.id)
+        if span.kind == SpanKind.AGENT_STEP and _SCENARIO_KEY in span.metadata:
+            _scenario_annotation(recording, span, scenario_attempts, scenario_outcomes)
+            continue
         metadata = copy.deepcopy(span.metadata)
         marker = metadata.pop(_BRIDGE_KEY, {})
         event = Event(
@@ -122,6 +187,8 @@ def cassette_to_events(
         else:
             raise ValueError(f"Unsupported cassette span kind: {span.kind.value}")
         events.append(event)
+    if scenario_attempts.keys() != scenario_outcomes:
+        raise ValueError("Incomplete scenario annotation: action attempt has no outcome")
     return events
 
 
