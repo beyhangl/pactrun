@@ -35,6 +35,26 @@ Expected decision summary:
 
 The output also includes the exact cassette path.
 
+## Reuse the workflow across scenarios
+
+The application logic now lives in `pactrun.scenarios.refunds`; the original
+`examples/support_refund.py` entry point still runs the demonstration. A reusable
+environment and 26-case pack add stateful testing without replacing cassettes:
+
+```bash
+# Install both matching source checkouts until the new scenario API is released
+python -m pip install -e ../evalcraft -e .
+python examples/refund_scenarios.py
+python examples/refund_scenarios.py --case refund-timeout-after-commit-reconciles
+```
+
+Each case owns fresh local provider, approval, and action ledgers. The runner
+executes the current workflow, snapshots actual state, and checks independently
+authored expected decisions/results/state. A restart reopens the same case's
+stores. Approval and fault orchestration remain host-owned; the environment does
+not receive expected answers. See [stateful scenarios](STATEFUL_SCENARIOS.md) for
+case authoring, artifact output, concurrency assertions, and the Python API.
+
 ## What the application owns
 
 The host supplies tenant/customer/principal identity and a signing key. The model
@@ -61,7 +81,9 @@ The tests cover:
 - foreign tenant/customer, wrong currency and invalid or excessive amounts;
 - changed amount after approval, edited timestamp and stale order state;
 - concurrent use of one grant and restart replay;
+- concurrent distinct grants cannot over-refund an order's shared balance;
 - provider timeout, crash between commit and recording, missing/mismatched evidence;
+- malformed provider evidence cannot masquerade as a verified integer amount;
 - recording and policy replay with stable token/event accounting;
 - changed application code against one recorded SDK reply: an incremented refund
   amount is rejected before a fake payment occurs.

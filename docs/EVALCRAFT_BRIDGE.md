@@ -41,6 +41,35 @@ one combined Pactrun tool event cannot faithfully represent those relationships.
 Input, output, error and turn events round-trip. Session turn accounting now
 advances on ingestion, so saved TURN_END events retain their original turn counts.
 
+## Stateful scenario cassettes
+
+The optional [refund scenario pack](STATEFUL_SCENARIOS.md) uses Evalcraft's
+`run_scenarios` to execute fresh environments against independently authored
+expectations. Install both matching source checkouts until releases contain the
+new runner and pack; the optional bridge dependency alone can select an older
+Evalcraft version without `evalcraft.scenarios`.
+
+The environment factory runs inside `CaptureContext` and attaches its
+`EvalcraftRecorder` to the active cassette. This preserves actual Pactrun events
+alongside the runner's informational action-attempt and outcome spans. Generic
+scenario actions do not become fabricated tool calls.
+
+The bridge skips only strictly recognized version 1 `evalcraft_scenario`
+envelopes on `AGENT_STEP` spans. An unknown or malformed envelope remains an
+unsupported conversion rather than silently disappearing. Supported observed
+SDK and Pactrun spans retain their normal conversion and accounting.
+
+The informational marker is not a verified execution receipt. Likewise, a
+Pactrun tool-call event can be an attempted call that was blocked. Assert both
+the outcome and authoritative application/provider state in the scenario report
+when testing a business effect. Policy replay of the cassette evaluates saved
+observations; it neither reruns state transitions nor imports scenario
+expectations as evidence of success.
+
+A compliant policy replay can accompany a failed scenario. Check
+`ScenarioReport.passed` or `ScenarioSuiteReport.passed` for the result of the
+outcome and business-state assertions.
+
 ## Policy replay versus changed-code playback
 
 `replay_cassette()` evaluates saved observations in monitor mode with the event

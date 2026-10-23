@@ -670,9 +670,9 @@ pactrun is the **runtime-enforcement** companion to [evalcraft](https://github.c
 
 | | evalcraft | pactrun |
 |---|---|---|
-| When | Post-hoc (after the run) | Real-time (during the run) |
+| When | During test execution and after recorded runs | Real-time (during the run) |
 | Question | "Did the agent behave correctly?" | "Is the agent behaving correctly right now?" |
-| How | Cassette replay + assertions | Contract enforcement + drift detection |
+| How | Cassette assertions, current-code playback, stateful scenarios | Contract enforcement + drift detection |
 
 The optional [cassette bridge](docs/EVALCRAFT_BRIDGE.md) now exports Pactrun events
 to Evalcraft and evaluates recorded cassettes against contracts. It normalizes
@@ -686,6 +686,24 @@ and uncertain-outcome reconciliation. Run it without API keys:
 ```bash
 python examples/support_refund.py --output-dir /tmp/pactrun-refund
 ```
+
+The [reusable stateful scenario pack](docs/STATEFUL_SCENARIOS.md) starts each case
+with fresh local state, runs the current refund workflow, and compares actual
+ledger snapshots against independently authored expectations. It covers 26
+cases, including concurrent distinct grants, uncertain provider outcomes, and
+malformed evidence. Keep cassettes alongside these state assertions:
+
+```bash
+# New API: install matching source checkouts until releases include it
+python -m pip install -e ../evalcraft -e .
+python examples/refund_scenarios.py
+python examples/refund_scenarios.py --list
+```
+
+No model SDK, API key, or real payment is needed. Use `--case NAME` to select a
+case and an optional fresh `--output-dir` to retain reports and cassettes.
+Synthetic success establishes the tested local behavior; actual model decisions
+and real-provider integration need separate evaluation.
 
 See [approval migration and limits](docs/APPROVAL_TOKENS.md) and
 [small contributor tasks](docs/CONTRIBUTOR_TASKS.md). Maintainer:
